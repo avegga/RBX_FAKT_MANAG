@@ -10,9 +10,9 @@
     <div class="page-shell">
         <aside class="sidebar" id="sidebar">
             <div>
-                <p class="eyebrow">Спринт 4</p>
+                <p class="eyebrow">Спринт 6</p>
                 <h1>RBX_FAKT_MANAG</h1>
-                <p class="sidebar-text">Типы, фильтры, порядок столбцов, сортировка и пересчёт ошибок по рабочему набору.</p>
+                <p class="sidebar-text">Инструкции, журнал событий и финальная доводка MVP поверх рабочего контура загрузки, обработки и сохранения.</p>
             </div>
 
             <nav class="tab-nav" aria-label="Основные разделы">
@@ -39,7 +39,7 @@
             <section class="tab-panel active" data-panel="overview">
                 <div class="hero-card">
                     <h3>Рабочий сценарий управления данными</h3>
-                    <p>После загрузки CSV пользователь может управлять типами столбцов, фильтрами, порядком отображения и сортировкой без потери полного рабочего набора.</p>
+                    <p>После загрузки CSV или XLSX пользователь может отфильтровать набор, выполнить парсинг, сохранить результат, просмотреть инструкции и отследить все ключевые события в журнале.</p>
                 </div>
 
                 <div class="card-grid two-columns">
@@ -49,7 +49,8 @@
                             <li>Назначение типов и автосохранение в шаблон</li>
                             <li>Фильтрация по типам на полном рабочем наборе</li>
                             <li>Видимость и порядок столбцов с мгновенным применением</li>
-                            <li>Сортировка таблицы и подсветка ошибочных ячеек</li>
+                            <li>Парсинг по отфильтрованным строкам, откат и сохранение в XLSX</li>
+                            <li>Вкладка Инструкции и журнал событий приложения</li>
                         </ul>
                     </article>
 
@@ -57,7 +58,7 @@
                         <h3>Текущее состояние</h3>
                         <dl class="summary-list">
                             <div><dt>Последний шаблон</dt><dd id="last-template-label">Не выбран</dd></div>
-                            <div><dt>Последний файл</dt><dd id="last-file-label">Не задан</dd></div>
+                            <div><dt>Файл в текущей сессии</dt><dd id="last-file-label">Не загружен</dd></div>
                             <div><dt>Правая панель</dt><dd id="right-panel-label">Включена</dd></div>
                             <div><dt>Панель ошибок</dt><dd id="errors-panel-label">Включена</dd></div>
                         </dl>
@@ -96,7 +97,7 @@
                     <div class="data-workspace">
                         <div class="data-table-card">
                             <div id="data-empty-state" class="data-empty-state">
-                                Выберите шаблон и загрузите CSV-файл, чтобы увидеть таблицу данных.
+                                Загрузите CSV- или XLSX-файл, чтобы увидеть таблицу данных. Шаблон можно выбрать заранее, но это не обязательно.
                             </div>
                             <div id="data-table-shell" class="data-table-shell hidden">
                                 <div id="data-table-header" class="data-table-header"></div>
@@ -109,7 +110,7 @@
                         </div>
                     </div>
 
-                    <input type="file" id="csv-file-input" accept=".csv,text/csv" hidden>
+                    <input type="file" id="csv-file-input" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
                 </article>
             </section>
 
@@ -124,18 +125,17 @@
                         </div>
 
                         <form id="settings-form" class="stack-form">
-                            <label>
-                                <span>Папка источника</span>
-                                <input type="text" name="source_folder" placeholder="D:/data/source">
-                            </label>
-                            <label>
+                            <label class="settings-field">
                                 <span>Папка результата</span>
                                 <input type="text" name="output_folder" placeholder="D:/data/output">
+                                <div class="field-error" data-error-for="output_folder"></div>
                             </label>
-                            <label>
+                            <label class="settings-field">
                                 <span>Файл инструкций</span>
                                 <input type="text" name="instructions_file" placeholder="D:/docs/instructions.txt">
+                                <div class="field-error" data-error-for="instructions_file"></div>
                             </label>
+                            <p class="panel-note">Загрузка исходных файлов выполняется вручную через кнопку «Загрузить» в рабочей области, поэтому отдельная папка источника больше не требуется.</p>
                             <div class="form-actions">
                                 <button type="submit" class="primary-button">Сохранить настройки</button>
                             </div>
@@ -216,16 +216,29 @@
             </section>
 
             <section class="tab-panel" data-panel="instructions">
-                <article class="card placeholder-card">
-                    <h3>Инструкции</h3>
-                    <p>Здесь будет подключён файл инструкций и его рабочее отображение.</p>
+                <article class="card">
+                    <div class="section-head">
+                        <div>
+                            <p class="eyebrow">Внешний файл</p>
+                            <h3>Инструкции</h3>
+                        </div>
+                        <button type="button" id="instructions-reload-button" class="secondary-button">Обновить</button>
+                    </div>
+                    <p id="instructions-status" class="service-message info">Укажите путь к текстовому файлу во вкладке Настройки.</p>
+                    <div id="instructions-meta" class="instructions-meta"></div>
+                    <pre id="instructions-content" class="instructions-content">После задания пути здесь будет показано содержимое файла инструкций.</pre>
                 </article>
             </section>
 
             <section class="tab-panel" data-panel="journal">
-                <article class="card placeholder-card">
-                    <h3>Журнал</h3>
-                    <p>Ниже выводятся последние события приложения, связанные с настройками и шаблонами.</p>
+                <article class="card">
+                    <div class="section-head journal-toolbar">
+                        <div>
+                            <h3>Журнал</h3>
+                            <p>События текущего запуска показаны отдельно от недавней истории, чтобы было видно, что произошло именно в этой сессии.</p>
+                        </div>
+                        <button type="button" id="clear-history-button" class="secondary-button">Очистить историю</button>
+                    </div>
                     <div id="journal-list" class="journal-list"></div>
                 </article>
             </section>

@@ -16,6 +16,26 @@ const defaultTableSettings = () => ({
     rowLimit: 100,
 });
 
+const defaultProcessingState = () => ({
+    mode: "parsing",
+    parseColumn: "",
+    delimiter: ",",
+    canUndo: false,
+});
+
+const emptyInstructions = () => ({
+    file_name: "",
+    file_path: "",
+    content: "",
+    error: "",
+});
+
+const emptyJournal = () => ({
+    session_started_at: "",
+    current_session: [],
+    history: [],
+});
+
 const emptyDerivedState = () => ({
     rows: [],
     filteredRows: [],
@@ -40,12 +60,16 @@ const state = {
         sort: { columnName: null, direction: null },
         derived: emptyDerivedState(),
     },
+    processing: defaultProcessingState(),
+    instructions: emptyInstructions(),
+    journal: emptyJournal(),
 };
 
 const columnTypes = ["text", "number", "money", "date", "datetime", "boolean"];
 const rowHeight = 44;
 const rowOverscan = 8;
 let stateSaveTimer = null;
+let settingsSaveTimer = null;
 
 const elements = {
     body: document.body,
@@ -73,6 +97,11 @@ const elements = {
     newTemplateButton: document.getElementById("new-template-button"),
     addColumnButton: document.getElementById("add-column-button"),
     deleteTemplateButton: document.getElementById("delete-template-button"),
+    instructionsStatus: document.getElementById("instructions-status"),
+    instructionsMeta: document.getElementById("instructions-meta"),
+    instructionsContent: document.getElementById("instructions-content"),
+    instructionsReloadButton: document.getElementById("instructions-reload-button"),
+    clearHistoryButton: document.getElementById("clear-history-button"),
     journalList: document.getElementById("journal-list"),
     lastTemplateLabel: document.getElementById("last-template-label"),
     lastFileLabel: document.getElementById("last-file-label"),
@@ -138,6 +167,55 @@ function setStatus(message, level = "info") {
     }
 }
 
+function formatEventTimestamp(value) {
+    if (!value) {
+        return "Без времени";
+    }
+
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+        return value;
+    }
+
+    return new Intl.DateTimeFormat("ru-RU", {
+        dateStyle: "short",
+        timeStyle: "medium",
+    }).format(parsed);
+}
+
+function getEventLevelLabel(level) {
+    if (level === "error") {
+        return "Ошибка";
+    }
+    if (level === "warning") {
+        return "Предупреждение";
+    }
+    return "Инфо";
+}
+
+function getEventTypeLabel(type) {
+    const labels = {
+        export_failed: "Ошибка сохранения",
+        export_success: "Сохранение",
+        instructions_failed: "Инструкции",
+        parse_applied: "Парсинг",
+        parse_undo: "Откат парсинга",
+        journal_history_cleared: "История журнала",
+        settings_failed: "Ошибка настроек",
+        settings_saved: "Настройки",
+        system_warning: "Системное предупреждение",
+        template_created: "Шаблон создан",
+        template_deleted: "Шаблон удалён",
+        template_updated: "Шаблон обновлён",
+        typing_error: "Ошибка типизации",
+        upload_failed: "Ошибка загрузки",
+        upload_partial: "Частичная загрузка",
+        upload_success: "Загрузка",
+    };
+
+    return labels[type] || type;
+}
+
 function switchTab(tabName) {
     elements.tabButtons.forEach((button) => {
         button.classList.toggle("active", button.dataset.tab === tabName);
@@ -195,6 +273,7 @@ function resetTableModel(preserveSettings = true) {
 function initializeTableModel() {
     if (!state.dataset.columns.length) {
         resetTableModel(true);
+        syncProcessingState();
         return;
     }
 
@@ -210,12 +289,109 @@ function initializeTableModel() {
     );
     state.table.sort = { columnName: null, direction: null };
     recomputeTableState();
+    syncProcessingState();
+}
+
+function syncProcessingState() {
+    const visibleColumns = state.table.derived.visibleColumns;
+    if (!visibleColumns.length) {
+        state.processing.parseColumn = "";
+        return;
+    }
+
+    if (!visibleColumns.some((column) => column.name === state.processing.parseColumn)) {
+        state.processing.parseColumn = visibleColumns[0].name;
+    }
+}
+
+function applyMutatedDataset(nextDataset) {
+    const previousColumns = new Map(state.table.columns.map((column) => [column.name, column]));
+    const previousFilters = state.table.filters;
+    const previousSort = { ...state.table.sort };
+
+    state.dataset = nextDataset || emptyDataset();
+    state.processing.canUndo = Boolean(state.dataset.can_undo_parse);
+
+    if (!state.dataset.columns.length) {
+        resetTableModel(true);
+        syncProcessingState();
+        return;
+    }
+
+    state.table.columns = state.dataset.columns.map((column, index) => {
+        const previousColumn = previousColumns.get(column.name);
+        return {
+            name: column.name,
+            type: previousColumn?.type || column.type,
+            visible: previousColumn?.visible ?? true,
+            position: previousColumn?.position ?? index,
+            fromTemplate: column.from_template,
+        };
+    });
+
+    state.table.filters = Object.fromEntries(
+        state.table.columns.map((column) => {
+            const previousFilter = previousFilters[column.name];
+            return [
+                column.name,
+                previousFilter ? { ...createFilterState(column.type), ...previousFilter } : createFilterState(column.type),
+            ];
+        })
+    );
+
+    state.table.sort = previousSort.columnName && state.table.columns.some((column) => column.name === previousSort.columnName)
+        ? previousSort
+        : { columnName: null, direction: null };
+
+    recomputeTableState();
+    syncProcessingState();
 }
 
 function syncSettingsForm() {
-    elements.settingsForm.source_folder.value = state.settings.source_folder || "";
     elements.settingsForm.output_folder.value = state.settings.output_folder || "";
     elements.settingsForm.instructions_file.value = state.settings.instructions_file || "";
+    clearSettingsErrors();
+}
+
+function clearSettingsErrors(fieldName = null) {
+    const fields = fieldName ? [fieldName] : ["output_folder", "instructions_file"];
+
+    fields.forEach((name) => {
+        const input = elements.settingsForm.elements[name];
+        const errorNode = elements.settingsForm.querySelector(`[data-error-for="${name}"]`);
+        if (input) {
+            input.removeAttribute("aria-invalid");
+        }
+        if (errorNode) {
+            errorNode.textContent = "";
+        }
+    });
+
+    if (!fieldName) {
+        elements.settingsErrors.textContent = "";
+    }
+}
+
+function applySettingsErrors(errors = {}) {
+    clearSettingsErrors();
+
+    const entries = Object.entries(errors);
+    if (!entries.length) {
+        return;
+    }
+
+    entries.forEach(([fieldName, message]) => {
+        const input = elements.settingsForm.elements[fieldName];
+        const errorNode = elements.settingsForm.querySelector(`[data-error-for="${fieldName}"]`);
+        if (input) {
+            input.setAttribute("aria-invalid", "true");
+        }
+        if (errorNode) {
+            errorNode.textContent = message;
+        }
+    });
+
+    elements.settingsErrors.textContent = "Проверьте поля с ошибками.";
 }
 
 function applyUiState() {
@@ -238,7 +414,7 @@ function applyUiState() {
 function syncStateLabels() {
     const activeTemplate = getActiveTemplate();
     elements.lastTemplateLabel.textContent = activeTemplate ? activeTemplate.name : "Не выбран";
-    elements.lastFileLabel.textContent = state.ui.last_loaded_file || "Не задан";
+    elements.lastFileLabel.textContent = state.dataset.file_name || "Не загружен";
     elements.rightPanelLabel.textContent = state.ui.right_panel_visible ? "Включена" : "Скрыта";
     elements.errorsPanelLabel.textContent = state.ui.errors_visible ? "Включена" : "Скрыта";
 }
@@ -361,28 +537,183 @@ function renderUploadTemplateOptions() {
     });
 
     elements.uploadTemplateSelect.value = state.activeTemplateId ? String(state.activeTemplateId) : "";
-    elements.currentFileName.textContent = state.dataset.file_name || state.ui.last_loaded_file || "Файл не выбран";
+    elements.currentFileName.textContent = state.dataset.file_name || "Файл не выбран";
 }
 
 async function loadJournal() {
-    const entries = await requestJson("/api/logs");
-    elements.journalList.innerHTML = "";
+    try {
+        const payload = await requestJson("/api/logs");
+        state.journal = {
+            session_started_at: payload.session_started_at || "",
+            current_session: payload.current_session || [],
+            history: payload.history || [],
+        };
+        elements.journalList.innerHTML = "";
+        elements.clearHistoryButton.disabled = !state.journal.history.length;
 
-    if (!entries.length) {
-        elements.journalList.textContent = "Событий пока нет.";
+        const sections = [
+            {
+                title: "Текущая сессия",
+                description: state.journal.session_started_at
+                    ? `События после запуска приложения в ${formatEventTimestamp(state.journal.session_started_at)}.`
+                    : "События текущего запуска приложения.",
+                entries: state.journal.current_session,
+                emptyText: "В этой сессии действий пока не было.",
+            },
+            {
+                title: "Недавняя история",
+                description: "Последние события из предыдущих запусков для справки.",
+                entries: state.journal.history,
+                emptyText: "Исторических событий пока нет.",
+            },
+        ];
+
+        sections.forEach((section) => {
+            const block = document.createElement("section");
+            block.className = "journal-section";
+
+            const heading = document.createElement("div");
+            heading.className = "journal-section-head";
+            heading.innerHTML = `<h4>${escapeHtml(section.title)}</h4><p>${escapeHtml(section.description)}</p>`;
+            block.appendChild(heading);
+
+            if (!section.entries.length) {
+                const emptyState = document.createElement("p");
+                emptyState.className = "panel-note";
+                emptyState.textContent = section.emptyText;
+                block.appendChild(emptyState);
+                elements.journalList.appendChild(block);
+                return;
+            }
+
+            const list = document.createElement("div");
+            list.className = "journal-section-list";
+
+            section.entries.forEach((entry) => {
+            const item = document.createElement("article");
+            item.className = `journal-item ${entry.event_level || "info"}`;
+
+            const meta = document.createElement("div");
+            meta.className = "journal-meta";
+
+            const time = document.createElement("span");
+            time.className = "journal-time";
+            time.textContent = formatEventTimestamp(entry.created_at);
+
+            const badges = document.createElement("div");
+            badges.className = "journal-badges";
+
+            const level = document.createElement("span");
+            level.className = `journal-badge level-${entry.event_level || "info"}`;
+            level.textContent = getEventLevelLabel(entry.event_level);
+
+            const type = document.createElement("span");
+            type.className = "journal-badge type-badge";
+            type.textContent = getEventTypeLabel(entry.event_type);
+
+            badges.append(level, type);
+            meta.append(time, badges);
+
+            const text = document.createElement("p");
+            text.className = "journal-description";
+            text.textContent = entry.event_description;
+
+            item.append(meta, text);
+            list.appendChild(item);
+            });
+
+            block.appendChild(list);
+            elements.journalList.appendChild(block);
+        });
+    } catch {
+        state.journal = emptyJournal();
+        elements.clearHistoryButton.disabled = true;
+        elements.journalList.textContent = "Не удалось загрузить журнал.";
+    }
+}
+
+async function clearJournalHistory() {
+    if (!state.journal.history.length) {
+        setStatus("История журнала уже пуста.", "info");
         return;
     }
 
-    entries.forEach((entry) => {
-        const item = document.createElement("div");
-        item.className = "journal-item";
-        const title = document.createElement("strong");
-        title.textContent = entry.event_type;
-        const text = document.createElement("span");
-        text.textContent = entry.event_description;
-        item.append(title, text);
-        elements.journalList.appendChild(item);
-    });
+    const confirmed = window.confirm("Очистить всю историю журнала из предыдущих запусков?");
+    if (!confirmed) {
+        return;
+    }
+
+    try {
+        const payload = await requestJson("/api/logs/history", { method: "DELETE" });
+        state.journal = {
+            session_started_at: payload.session_started_at || "",
+            current_session: payload.current_session || [],
+            history: payload.history || [],
+        };
+        await loadJournal();
+        setStatus(`История журнала очищена: ${payload.deleted_count || 0} записей.`, "success");
+    } catch {
+        setStatus("Не удалось очистить историю журнала.", "error");
+    }
+}
+
+function renderInstructions() {
+    if (state.instructions.error) {
+        elements.instructionsStatus.textContent = state.instructions.error;
+        elements.instructionsStatus.className = "service-message error";
+        elements.instructionsMeta.innerHTML = "";
+        elements.instructionsContent.textContent = "Файл инструкций недоступен.";
+        return;
+    }
+
+    if (!state.instructions.file_name) {
+        elements.instructionsStatus.textContent = "Укажите путь к текстовому файлу во вкладке Настройки.";
+        elements.instructionsStatus.className = "service-message info";
+        elements.instructionsMeta.innerHTML = "";
+        elements.instructionsContent.textContent = "После задания пути здесь будет показано содержимое файла инструкций.";
+        return;
+    }
+
+    elements.instructionsStatus.textContent = `Подключён файл: ${state.instructions.file_name}`;
+    elements.instructionsStatus.className = "service-message success";
+    elements.instructionsMeta.innerHTML = `
+        <div class="panel-line"><span>Имя файла</span><strong>${escapeHtml(state.instructions.file_name)}</strong></div>
+        <div class="panel-line"><span>Путь</span><strong>${escapeHtml(state.instructions.file_path)}</strong></div>
+    `;
+    elements.instructionsContent.textContent = state.instructions.content || "Файл пуст.";
+}
+
+async function loadInstructions(options = {}) {
+    const notify = options.notify === true;
+
+    try {
+        const payload = await requestJson("/api/instructions");
+        state.instructions = {
+            file_name: payload.file_name || "",
+            file_path: payload.file_path || "",
+            content: payload.content || "",
+            error: "",
+        };
+        renderInstructions();
+        if (notify) {
+            setStatus("Инструкции обновлены", "success");
+        }
+    } catch (error) {
+        if ((error.error || "") === "Файл инструкций не задан в настройках.") {
+            state.instructions = emptyInstructions();
+            renderInstructions();
+            return;
+        }
+
+        state.instructions = {
+            ...emptyInstructions(),
+            error: error.error || "Не удалось загрузить инструкции.",
+        };
+        renderInstructions();
+        if (notify) {
+            setStatus(state.instructions.error, "error");
+        }
+    }
 }
 
 function getOrderedColumns() {
@@ -514,6 +845,59 @@ function formatNumberValue(value, type) {
         return String(normalized);
     }
     return String(normalized);
+}
+
+function splitParsingFragments(rawValue, delimiter) {
+    if (!delimiter) {
+        return [];
+    }
+
+    return String(rawValue ?? "")
+        .split(delimiter)
+        .map((fragment) => fragment.trim())
+        .filter(Boolean);
+}
+
+function getParsingPreview() {
+    syncProcessingState();
+    const affectedRows = state.table.derived.filteredRows;
+
+    if (state.processing.mode !== "parsing") {
+        return { valid: false, reason: "", deletedRows: 0, createdRows: 0, rowIds: [] };
+    }
+
+    if (!state.processing.parseColumn) {
+        return {
+            valid: false,
+            reason: "Выберите видимый столбец для парсинга.",
+            deletedRows: 0,
+            createdRows: 0,
+            rowIds: [],
+        };
+    }
+
+    if (!state.processing.delimiter) {
+        return {
+            valid: false,
+            reason: "Укажите разделитель парсинга.",
+            deletedRows: 0,
+            createdRows: 0,
+            rowIds: affectedRows.map((row) => row.row_id),
+        };
+    }
+
+    let createdRows = 0;
+    affectedRows.forEach((row) => {
+        createdRows += splitParsingFragments(row.values[state.processing.parseColumn], state.processing.delimiter).length;
+    });
+
+    return {
+        valid: true,
+        reason: affectedRows.length ? "Парсинг будет применён ко всем строкам после фильтрации." : "После фильтрации нет строк для обработки.",
+        deletedRows: affectedRows.length,
+        createdRows,
+        rowIds: affectedRows.map((row) => row.row_id),
+    };
 }
 
 function evaluateCell(rawValue, column) {
@@ -946,10 +1330,10 @@ function renderDataset() {
     const hasColumns = Boolean(state.dataset.columns.length);
     elements.dataEmptyState.classList.toggle("hidden", hasColumns);
     elements.dataTableShell.classList.toggle("hidden", !hasColumns);
-    elements.currentFileName.textContent = state.dataset.file_name || state.ui.last_loaded_file || "Файл не выбран";
+    elements.currentFileName.textContent = state.dataset.file_name || "Файл не выбран";
 
     if (!hasColumns) {
-        elements.dataEmptyState.textContent = "Выберите шаблон и загрузите CSV-файл, чтобы увидеть таблицу данных.";
+        elements.dataEmptyState.textContent = "Загрузите CSV- или XLSX-файл, чтобы увидеть таблицу данных. Шаблон можно выбрать заранее, но это не обязательно.";
         elements.dataTableRows.innerHTML = "";
         elements.dataTableHeader.innerHTML = "";
         elements.dataTableSpacerTop.style.height = "0px";
@@ -1124,9 +1508,56 @@ function renderTypesPanel() {
 }
 
 function renderProcessingPanel() {
+    if (!state.dataset.columns.length) {
+        elements.processingPanelContent.innerHTML = '<p class="muted-copy">После загрузки здесь станут доступны парсинг, предпросмотр и откат.</p>';
+        return;
+    }
+
+    syncProcessingState();
+    const visibleColumns = state.table.derived.visibleColumns;
+    const preview = getParsingPreview();
+
     elements.processingPanelContent.innerHTML = `
         <div class="panel-list">
-            <div class="panel-note">Обработка данных начинается в следующем спринте.</div>
+            <div class="processing-mode-grid">
+                <label class="control-card checkbox-card inline-checkbox">
+                    <input type="radio" name="processing-mode" data-action="processing-mode" value="parsing" ${state.processing.mode === "parsing" ? "checked" : ""}>
+                    <span>Парсинг</span>
+                </label>
+                <label class="control-card checkbox-card inline-checkbox">
+                    <input type="radio" name="processing-mode" data-action="processing-mode" value="other" ${state.processing.mode === "other" ? "checked" : ""}>
+                    <span>Прочее</span>
+                </label>
+            </div>
+            ${state.processing.mode === "parsing"
+                ? `
+                    <label class="control-card control-stack">
+                        <span>Столбец парсинга</span>
+                        <select data-action="parse-column">
+                            ${visibleColumns
+                                .map(
+                                    (column) => `<option value="${escapeHtml(column.name)}" ${column.name === state.processing.parseColumn ? "selected" : ""}>${escapeHtml(column.name)}</option>`
+                                )
+                                .join("")}
+                        </select>
+                    </label>
+                    <label class="control-card control-stack">
+                        <span>Разделитель парсинга</span>
+                        <input type="text" data-action="parse-delimiter" value="${escapeHtml(state.processing.delimiter)}" placeholder="," maxlength="20">
+                    </label>
+                    <div class="processing-preview-grid">
+                        <div class="panel-line"><span>Удалится строк</span><strong>${preview.deletedRows}</strong></div>
+                        <div class="panel-line"><span>Создастся строк</span><strong>${preview.createdRows}</strong></div>
+                    </div>
+                    <div class="panel-note">${escapeHtml(preview.reason)}</div>
+                    <div class="processing-actions">
+                        <button type="button" class="primary-button" data-action="execute-parse" ${!preview.valid || !preview.rowIds.length ? "disabled" : ""}>Выполнить парсинг</button>
+                        <button type="button" class="secondary-button" data-action="undo-parse" ${!state.processing.canUndo ? "disabled" : ""}>Откатить последний парсинг</button>
+                    </div>
+                `
+                : `
+                    <div class="panel-note">Режим Прочее остаётся заглушкой в рамках MVP.</div>
+                `}
             <div class="panel-line"><span>Активный шаблон</span><strong>${escapeHtml(getActiveTemplate()?.name || "Без шаблона")}</strong></div>
             <div class="panel-line"><span>Ошибок после пересчёта</span><strong>${state.table.derived.errors.length}</strong></div>
         </div>
@@ -1240,6 +1671,8 @@ async function reloadBootstrap(preferredTemplateId = null) {
     state.templates = payload.templates;
     state.ui = payload.state;
     state.dataset = payload.dataset || emptyDataset();
+    state.journal = payload.logs || emptyJournal();
+    state.processing.canUndo = Boolean(state.dataset.can_undo_parse);
     state.activeTemplateId = preferredTemplateId ?? state.ui.last_template_id ?? state.templates[0]?.id ?? null;
 
     syncSettingsForm();
@@ -1252,30 +1685,58 @@ async function reloadBootstrap(preferredTemplateId = null) {
     renderRightPanels();
     renderErrorsPanel();
     await loadJournal();
+    await loadInstructions();
 }
 
-async function saveSettings(event) {
-    event.preventDefault();
-    elements.settingsErrors.textContent = "";
+function getSettingsPayload() {
+    return {
+        output_folder: elements.settingsForm.output_folder.value.trim(),
+        instructions_file: elements.settingsForm.instructions_file.value.trim(),
+    };
+}
+
+async function persistSettings(options = {}) {
+    const notify = options.notify !== false;
+    clearSettingsErrors();
 
     try {
-        const payload = {
-            source_folder: elements.settingsForm.source_folder.value.trim(),
-            output_folder: elements.settingsForm.output_folder.value.trim(),
-            instructions_file: elements.settingsForm.instructions_file.value.trim(),
-        };
+        const payload = getSettingsPayload();
         const response = await requestJson("/api/settings", {
             method: "PUT",
             body: JSON.stringify(payload),
         });
         state.settings = response.settings;
-        setStatus("Настройки сохранены", "success");
+        clearSettingsErrors();
+        if (notify) {
+            setStatus("Настройки сохранены", "success");
+        }
         await loadJournal();
+        await loadInstructions();
+        return true;
     } catch (error) {
-        const messages = Object.values(error.errors || {}).join(" ");
-        elements.settingsErrors.textContent = messages || "Не удалось сохранить настройки.";
-        setStatus("Ошибка сохранения настроек", "error");
+        const fieldErrors = error.errors || {};
+        if (Object.keys(fieldErrors).length) {
+            applySettingsErrors(fieldErrors);
+        } else {
+            elements.settingsErrors.textContent = "Не удалось сохранить настройки.";
+        }
+        if (notify) {
+            setStatus("Ошибка сохранения настроек", "error");
+        }
+        return false;
     }
+}
+
+async function saveSettings(event) {
+    event.preventDefault();
+    await persistSettings({ notify: true });
+}
+
+function scheduleSettingsSave() {
+    window.clearTimeout(settingsSaveTimer);
+    settingsSaveTimer = window.setTimeout(() => {
+        void persistSettings({ notify: false });
+    }, 300);
 }
 
 function scheduleStateSave(patch = {}, options = {}) {
@@ -1365,6 +1826,7 @@ async function handleFileSelected(event) {
             body: formData,
         });
         state.dataset = response.dataset || emptyDataset();
+        state.processing.canUndo = Boolean(state.dataset.can_undo_parse);
         initializeTableModel();
         renderDataset();
         renderRightPanels();
@@ -1380,6 +1842,7 @@ async function handleFileSelected(event) {
         switchTab("analysis");
     } catch (error) {
         state.dataset = emptyDataset();
+        state.processing.canUndo = false;
         resetTableModel(true);
         renderDataset();
         renderRightPanels();
@@ -1387,6 +1850,89 @@ async function handleFileSelected(event) {
         setStatus(error.error || "Ошибка загрузки файла.", "error");
     } finally {
         elements.csvFileInput.value = "";
+    }
+}
+
+async function executeParsing() {
+    const preview = getParsingPreview();
+    if (!preview.valid) {
+        setStatus(preview.reason || "Проверьте параметры парсинга.", "warning");
+        return;
+    }
+    if (!preview.rowIds.length) {
+        setStatus("Нет строк после фильтрации для парсинга.", "warning");
+        return;
+    }
+
+    try {
+        const response = await requestJson("/api/data/parse", {
+            method: "POST",
+            body: JSON.stringify({
+                column_name: state.processing.parseColumn,
+                delimiter: state.processing.delimiter,
+                row_ids: preview.rowIds,
+            }),
+        });
+        applyMutatedDataset(response.dataset || emptyDataset());
+        refreshDataViews();
+        await loadJournal();
+        setStatus(
+            `Парсинг выполнен: удалено ${response.summary?.deleted_rows || 0}, создано ${response.summary?.created_rows || 0}.`,
+            "success"
+        );
+    } catch (error) {
+        setStatus(error.error || "Не удалось выполнить парсинг.", "error");
+    }
+}
+
+async function undoLastParsing() {
+    if (!state.processing.canUndo) {
+        setStatus("Нет доступного шага отката.", "warning");
+        return;
+    }
+
+    try {
+        const response = await requestJson("/api/data/parse/undo", {
+            method: "POST",
+            body: JSON.stringify({}),
+        });
+        applyMutatedDataset(response.dataset || emptyDataset());
+        refreshDataViews();
+        await loadJournal();
+        setStatus("Последний парсинг отменён.", "success");
+    } catch (error) {
+        setStatus(error.error || "Не удалось откатить парсинг.", "error");
+    }
+}
+
+async function exportCurrentDataset() {
+    if (!state.dataset.columns.length) {
+        setStatus("Нет данных для сохранения.", "warning");
+        return;
+    }
+
+    const visibleColumns = state.table.derived.visibleColumns;
+    if (!visibleColumns.length) {
+        setStatus("Нет видимых столбцов для сохранения.", "warning");
+        return;
+    }
+
+    const rows = state.table.derived.filteredRows.map((row) =>
+        Object.fromEntries(visibleColumns.map((column) => [column.name, row.cells[column.name].display]))
+    );
+
+    try {
+        const response = await requestJson("/api/data/export", {
+            method: "POST",
+            body: JSON.stringify({
+                columns: visibleColumns.map((column) => ({ name: column.name, type: column.type })),
+                rows,
+            }),
+        });
+        await loadJournal();
+        setStatus(`Результат сохранён: ${response.file_name}.`, "success");
+    } catch (error) {
+        setStatus(error.error || "Не удалось сохранить XLSX.", "error");
     }
 }
 
@@ -1439,6 +1985,16 @@ function handleDetailsClick(event) {
     const action = button.dataset.action;
     const columnName = button.dataset.column;
 
+    if (action === "execute-parse") {
+        void executeParsing();
+        return;
+    }
+
+    if (action === "undo-parse") {
+        void undoLastParsing();
+        return;
+    }
+
     if (action === "move-column") {
         swapColumns(columnName, button.dataset.direction);
         refreshDataViews();
@@ -1465,6 +2021,18 @@ function handleHeaderClick(event) {
 
 async function handleDetailsChange(event) {
     const target = event.target;
+
+    if (target.dataset.action === "processing-mode") {
+        state.processing.mode = target.value;
+        renderProcessingPanel();
+        return;
+    }
+
+    if (target.dataset.action === "parse-column") {
+        state.processing.parseColumn = target.value;
+        renderProcessingPanel();
+        return;
+    }
 
     if (target.dataset.general === "hideMoneyCents") {
         state.table.settings.hideMoneyCents = target.checked;
@@ -1536,6 +2104,12 @@ async function handleDetailsChange(event) {
 
 function handleDetailsInput(event) {
     const target = event.target;
+    if (target.dataset.action === "parse-delimiter") {
+        state.processing.delimiter = target.value;
+        renderProcessingPanel();
+        return;
+    }
+
     if (target.dataset.action === "filter-text") {
         const column = getColumnState(target.dataset.column);
         const filter = ensureFilter(target.dataset.column, column?.type || "text");
@@ -1569,6 +2143,17 @@ function bindEvents() {
     elements.detailsPanel.addEventListener("input", handleDetailsInput);
 
     elements.settingsForm.addEventListener("submit", saveSettings);
+    elements.settingsForm.addEventListener("change", () => {
+        scheduleSettingsSave();
+    });
+    elements.settingsForm.addEventListener("input", (event) => {
+        const fieldName = event.target?.name;
+        if (fieldName) {
+            clearSettingsErrors(fieldName);
+        } else {
+            clearSettingsErrors();
+        }
+    });
     elements.templateForm.addEventListener("submit", saveTemplate);
     elements.newTemplateButton.addEventListener("click", () => {
         state.activeTemplateId = null;
@@ -1608,12 +2193,14 @@ function bindEvents() {
     });
     elements.uploadButton.addEventListener("click", () => elements.csvFileInput.click());
     elements.csvFileInput.addEventListener("change", handleFileSelected);
+    elements.instructionsReloadButton.addEventListener("click", () => {
+        void loadInstructions({ notify: true });
+    });
+    elements.clearHistoryButton.addEventListener("click", () => {
+        void clearJournalHistory();
+    });
     elements.exportButton.addEventListener("click", () => {
-        if (!state.dataset.rows.length) {
-            setStatus("Нет данных для сохранения.", "warning");
-            return;
-        }
-        setStatus("Сохранение в XLSX запланировано на следующий спринт.", "info");
+        void exportCurrentDataset();
     });
     elements.toggleRightPanelButton.addEventListener("click", () => {
         scheduleStateSave({ right_panel_visible: !state.ui.right_panel_visible });
