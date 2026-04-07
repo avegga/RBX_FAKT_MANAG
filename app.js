@@ -68,8 +68,13 @@ const state = {
 const columnTypes = ["text", "number", "money", "date", "datetime", "boolean"];
 const rowHeight = 44;
 const rowOverscan = 8;
+const DEFAULT_COLUMN_WIDTH = 220;
+const MIN_COLUMN_WIDTH = 120;
+const MAX_COLUMN_WIDTH = 640;
+const DEFAULT_SAVE_STATUS_TEXT = "Готово к работе";
 let stateSaveTimer = null;
 let settingsSaveTimer = null;
+let activeResize = null;
 
 const elements = {
     body: document.body,
@@ -119,7 +124,7 @@ const elements = {
     toggleRightPanelButton: document.getElementById("toggle-right-panel-button"),
     displayAllToggle: document.getElementById("display-all-toggle"),
     csvFileInput: document.getElementById("csv-file-input"),
-    datasetStats: document.getElementById("dataset-stats"),
+    // datasetStats: удалено
     dataEmptyState: document.getElementById("data-empty-state"),
     dataTableShell: document.getElementById("data-table-shell"),
     dataTableHeader: document.getElementById("data-table-header"),
@@ -127,6 +132,10 @@ const elements = {
     dataTableSpacerTop: document.getElementById("data-table-spacer-top"),
     dataTableRows: document.getElementById("data-table-rows"),
     dataTableSpacerBottom: document.getElementById("data-table-spacer-bottom"),
+    dataWorkspace: document.querySelector(".data-workspace"),
+    dataMainPane: document.querySelector(".data-main-pane"),
+    workspaceSplitter: document.getElementById("workspace-splitter"),
+    errorsSplitter: document.getElementById("errors-splitter"),
     generalPanelContent: document.getElementById("general-panel-content"),
     columnsPanelContent: document.getElementById("columns-panel-content"),
     filtersPanelContent: document.getElementById("filters-panel-content"),
@@ -159,12 +168,35 @@ function escapeHtml(value) {
 }
 
 function setStatus(message, level = "info") {
+    if (isFactsTabActive()) {
+        elements.saveStatus.hidden = true;
+        elements.saveStatus.textContent = DEFAULT_SAVE_STATUS_TEXT;
+        delete elements.saveStatus.dataset.level;
+        if (elements.serviceMessage) {
+            elements.serviceMessage.textContent = message;
+            elements.serviceMessage.className = `service-message ${level}`;
+        }
+        return;
+    }
+
+    elements.saveStatus.hidden = false;
     elements.saveStatus.textContent = message;
     elements.saveStatus.dataset.level = level;
-    if (elements.serviceMessage) {
-        elements.serviceMessage.textContent = message;
-        elements.serviceMessage.className = `service-message ${level}`;
+}
+
+function isFactsTabActive() {
+    return elements.tabPanels.some((panel) => panel.dataset.panel === "facts" && panel.classList.contains("active"));
+}
+
+function syncSaveStatusWithActiveTab() {
+    if (isFactsTabActive()) {
+        elements.saveStatus.hidden = true;
+        elements.saveStatus.textContent = DEFAULT_SAVE_STATUS_TEXT;
+        delete elements.saveStatus.dataset.level;
+        return;
     }
+
+    elements.saveStatus.hidden = false;
 }
 
 function formatEventTimestamp(value) {
@@ -225,7 +257,16 @@ function switchTab(tabName) {
         panel.classList.toggle("active", panel.dataset.panel === tabName);
     });
 
+    elements.body.classList.toggle("facts-tab-active", tabName === "facts");
+
+    syncSaveStatusWithActiveTab();
+
     const activeButton = elements.tabButtons.find((button) => button.dataset.tab === tabName);
+    if (tabName === "facts") {
+        elements.activeTabTitle.textContent = "";
+        return;
+    }
+
     elements.activeTabTitle.textContent = activeButton ? activeButton.textContent : "Обзор";
 }
 
@@ -282,6 +323,7 @@ function initializeTableModel() {
         type: column.type,
         visible: true,
         position: index,
+        width: DEFAULT_COLUMN_WIDTH,
         fromTemplate: column.from_template,
     }));
     state.table.filters = Object.fromEntries(
@@ -325,6 +367,7 @@ function applyMutatedDataset(nextDataset) {
             type: previousColumn?.type || column.type,
             visible: previousColumn?.visible ?? true,
             position: previousColumn?.position ?? index,
+            width: previousColumn?.width ?? DEFAULT_COLUMN_WIDTH,
             fromTemplate: column.from_template,
         };
     });
@@ -417,6 +460,81 @@ function syncStateLabels() {
     elements.lastFileLabel.textContent = state.dataset.file_name || "Не загружен";
     elements.rightPanelLabel.textContent = state.ui.right_panel_visible ? "Включена" : "Скрыта";
     elements.errorsPanelLabel.textContent = state.ui.errors_visible ? "Включена" : "Скрыта";
+}
+
+function clamp(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+}
+
+function startResize(type, event) {
+    if (event.button !== 0) {
+        return;
+    }
+
+    event.preventDefault();
+    activeResize = { type };
+    elements.body.classList.toggle("is-resizing", type === "vertical");
+    elements.body.classList.toggle("is-resizing-row", type === "horizontal");
+    window.addEventListener("mousemove", handleResizeMove);
+    window.addEventListener("mouseup", stopResize);
+}
+
+function handleResizeMove(event) {
+    if (!activeResize) {
+        return;
+    }
+
+    if (activeResize.type === "column") {
+        const column = getColumnState(activeResize.columnName);
+        if (!column) {
+            stopResize();
+            return;
+        }
+
+        column.width = clamp(activeResize.startWidth + event.clientX - activeResize.startX, MIN_COLUMN_WIDTH, MAX_COLUMN_WIDTH);
+        renderHeader();
+        renderVirtualRows();
+        return;
+    }
+
+    if (activeResize.type === "vertical" && elements.dataWorkspace) {
+        const rect = elements.dataWorkspace.getBoundingClientRect();
+        const nextWidth = clamp(Math.round(rect.right - event.clientX), 240, 420);
+        state.ui = { ...state.ui, left_panel_width: nextWidth };
+        applyUiState();
+        return;
+    }
+
+    if (activeResize.type === "horizontal" && elements.dataMainPane) {
+        const rect = elements.dataMainPane.getBoundingClientRect();
+        const nextHeight = clamp(Math.round(rect.bottom - event.clientY), 120, 320);
+        state.ui = { ...state.ui, errors_height: nextHeight };
+        applyUiState();
+    }
+}
+
+function stopResize() {
+    if (!activeResize) {
+        return;
+    }
+
+    if (activeResize.type === "column") {
+        activeResize = null;
+        elements.body.classList.remove("is-resizing", "is-resizing-row");
+        window.removeEventListener("mousemove", handleResizeMove);
+        window.removeEventListener("mouseup", stopResize);
+        return;
+    }
+
+    const patch = activeResize.type === "vertical"
+        ? { left_panel_width: state.ui.left_panel_width }
+        : { errors_height: state.ui.errors_height };
+
+    activeResize = null;
+    elements.body.classList.remove("is-resizing", "is-resizing-row");
+    window.removeEventListener("mousemove", handleResizeMove);
+    window.removeEventListener("mouseup", stopResize);
+    scheduleStateSave(patch, { notify: false });
 }
 
 function renderTemplateList() {
@@ -833,13 +951,46 @@ function formatDateTime(date) {
     return `${formatDate(date)} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
+function addThousandsSeparator(value) {
+    return value.replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+}
+
+function formatMoneyValue(value) {
+    const normalized = state.table.settings.hideMoneyCents ? Math.trunc(value) : value;
+    const sign = normalized < 0 ? "-" : "";
+    const absolute = Math.abs(normalized);
+
+    if (state.table.settings.hideMoneyCents) {
+        return `${sign}${addThousandsSeparator(String(Math.trunc(absolute)))} р.`;
+    }
+
+    const [integerPart, fractionPart] = absolute.toFixed(2).split(".");
+    return `${sign}${addThousandsSeparator(integerPart)}.${fractionPart} р.`;
+}
+
+function formatMoneyExportValue(value) {
+    if (state.table.settings.hideMoneyCents) {
+        return String(Math.trunc(value));
+    }
+
+    return value.toFixed(2);
+}
+
+function formatCellValueForExport(cell, column) {
+    if (column.type === "money" && typeof cell.normalized === "number" && !Number.isNaN(cell.normalized)) {
+        return formatMoneyExportValue(cell.normalized);
+    }
+
+    return cell.display;
+}
+
 function formatNumberValue(value, type) {
     let normalized = value;
     if (type === "number" && state.table.settings.numbersAsIntegers) {
         normalized = Math.trunc(normalized);
     }
-    if (type === "money" && state.table.settings.hideMoneyCents) {
-        normalized = Math.trunc(normalized);
+    if (type === "money") {
+        return formatMoneyValue(normalized);
     }
     if (Number.isInteger(normalized)) {
         return String(normalized);
@@ -1202,7 +1353,12 @@ function recomputeTableState() {
 }
 
 function getGridTemplate() {
-    return `72px repeat(${Math.max(1, state.table.derived.visibleColumns.length)}, minmax(160px, 1fr))`;
+    const visibleColumns = state.table.derived.visibleColumns;
+    if (!visibleColumns.length) {
+        return "72px minmax(160px, 1fr)";
+    }
+
+    return ["72px", ...visibleColumns.map((column) => `${Math.max(MIN_COLUMN_WIDTH, column.width || DEFAULT_COLUMN_WIDTH)}px`)].join(" ");
 }
 
 function renderDatasetStats() {
@@ -1213,32 +1369,16 @@ function renderDatasetStats() {
     const warnings = state.dataset.warnings.length;
     const errors = state.table.derived.errors.length;
 
-    elements.datasetStats.innerHTML = `
-        <div class="stat-chip">
-            <span>Строк всего</span>
-            <strong>${totalRows}</strong>
-        </div>
-        <div class="stat-chip">
-            <span>После фильтра</span>
-            <strong>${filteredRows}</strong>
-        </div>
-        <div class="stat-chip">
-            <span>Показано</span>
-            <strong>${shownRows}</strong>
-        </div>
-        <div class="stat-chip">
-            <span>Видимых столбцов</span>
-            <strong>${visibleColumns}</strong>
-        </div>
-        <div class="stat-chip ${warnings ? "warning" : ""}">
-            <span>Предупреждения</span>
-            <strong>${warnings}</strong>
-        </div>
-        <div class="stat-chip ${errors ? "danger" : ""}">
-            <span>Ошибки</span>
-            <strong>${errors}</strong>
-        </div>
-    `;
+    // Новая строка статистики в data-stats-row
+    const statsRow = document.getElementById("data-stats-row");
+    if (statsRow) {
+        statsRow.querySelector('#stat-total-rows').textContent = `Строк всего: ${totalRows}`;
+        statsRow.querySelector('#stat-filtered-rows').textContent = `После фильтра: ${filteredRows}`;
+        statsRow.querySelector('#stat-visible-rows').textContent = `Показано: ${shownRows}`;
+        statsRow.querySelector('#stat-visible-cols').textContent = `Видимых столбцов: ${visibleColumns}`;
+        statsRow.querySelector('#stat-warnings').textContent = `Предупреждения: ${warnings}`;
+        statsRow.querySelector('#stat-errors').textContent = `Ошибки: ${errors}`;
+    }
 }
 
 function getSortIndicator(columnName) {
@@ -1260,13 +1400,16 @@ function renderHeader() {
     const headerCells = ['<div class="table-cell index-head">#</div>'];
     visibleColumns.forEach((column) => {
         headerCells.push(`
-            <button type="button" class="table-cell header-cell table-sort-button" data-action="sort-column" data-column="${escapeHtml(column.name)}">
-                <span>${escapeHtml(column.name)}</span>
-                <span class="header-tools">
-                    <span class="column-badge">${escapeHtml(column.type)}</span>
-                    <span class="sort-indicator">${getSortIndicator(column.name)}</span>
-                </span>
-            </button>
+            <div class="table-cell header-cell table-header-cell" data-column="${escapeHtml(column.name)}">
+                <button type="button" class="table-sort-button" data-action="sort-column" data-column="${escapeHtml(column.name)}">
+                    <span>${escapeHtml(column.name)}</span>
+                    <span class="header-tools">
+                        <span class="column-badge">${escapeHtml(column.type)}</span>
+                        <span class="sort-indicator">${getSortIndicator(column.name)}</span>
+                    </span>
+                </button>
+                <span class="col-resizer" data-action="resize-column" data-column="${escapeHtml(column.name)}"></span>
+            </div>
         `);
     });
     elements.dataTableHeader.innerHTML = headerCells.join("");
@@ -1586,15 +1729,16 @@ function renderErrorsPanel() {
 
     elements.issuesSummary.textContent = `Предупреждений: ${warnings.length}. Ошибок: ${errors.length}.`;
     const warningMarkup = warnings.map(
-        (warning) => `<div class="issue-item warning"><strong>Предупреждение</strong><span>${escapeHtml(warning)}</span></div>`
+        (warning) => {
+            const message = `Предупреждение: ${warning}`;
+            return `<div class="issue-item warning" title="${escapeHtml(message)}">${escapeHtml(message)}</div>`;
+        }
     );
     const errorMarkup = errors.map(
-        (error) => `
-            <div class="issue-item error">
-                <strong>Строка ${error.row_number}, столбец ${escapeHtml(error.column_name)}</strong>
-                <span>${escapeHtml(error.reason)}. Значение: ${escapeHtml(error.value || "")}</span>
-            </div>
-        `
+        (error) => {
+            const message = `Строка ${error.row_number}, столбец ${error.column_name}: ${error.reason}. Значение: ${error.value || ""}`;
+            return `<div class="issue-item error" title="${escapeHtml(message)}">${escapeHtml(message)}</div>`;
+        }
     );
     elements.issuesList.innerHTML = [...warningMarkup, ...errorMarkup].join("");
     elements.errorsPanelMessage.textContent = state.dataset.partial
@@ -1839,7 +1983,7 @@ async function handleFileSelected(event) {
             ? `Файл ${state.dataset.file_name} загружен частично.`
             : `Данные успешно загружены: ${state.dataset.file_name}.`;
         setStatus(message, level);
-        switchTab("analysis");
+        switchTab("facts");
     } catch (error) {
         state.dataset = emptyDataset();
         state.processing.canUndo = false;
@@ -1918,7 +2062,7 @@ async function exportCurrentDataset() {
     }
 
     const rows = state.table.derived.filteredRows.map((row) =>
-        Object.fromEntries(visibleColumns.map((column) => [column.name, row.cells[column.name].display]))
+        Object.fromEntries(visibleColumns.map((column) => [column.name, formatCellValueForExport(row.cells[column.name], column)]))
     );
 
     try {
@@ -1950,6 +2094,29 @@ function toggleSort(columnName) {
         return;
     }
     state.table.sort = { columnName, direction: "asc" };
+}
+
+function startColumnResize(columnName, event) {
+    if (event.button !== 0) {
+        return;
+    }
+
+    const column = getColumnState(columnName);
+    if (!column) {
+        return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    activeResize = {
+        type: "column",
+        columnName,
+        startX: event.clientX,
+        startWidth: Math.max(MIN_COLUMN_WIDTH, column.width || DEFAULT_COLUMN_WIDTH),
+    };
+    elements.body.classList.add("is-resizing");
+    window.addEventListener("mousemove", handleResizeMove);
+    window.addEventListener("mouseup", stopResize);
 }
 
 function swapColumns(columnName, direction) {
@@ -2010,6 +2177,10 @@ function handleDetailsClick(event) {
 }
 
 function handleHeaderClick(event) {
+    if (event.target.closest(".col-resizer")) {
+        return;
+    }
+
     const button = event.target.closest("[data-action='sort-column']");
     if (!button) {
         return;
@@ -2017,6 +2188,15 @@ function handleHeaderClick(event) {
     toggleSort(button.dataset.column);
     refreshDataViews();
     setStatus("Сортировка обновлена", "success");
+}
+
+function handleHeaderMouseDown(event) {
+    const resizer = event.target.closest("[data-action='resize-column']");
+    if (!resizer) {
+        return;
+    }
+
+    startColumnResize(resizer.dataset.column, event);
 }
 
 async function handleDetailsChange(event) {
@@ -2137,6 +2317,7 @@ function bindEvents() {
 
     elements.detailsPanel.addEventListener("click", handleDetailsClick);
     elements.dataTableHeader.addEventListener("click", handleHeaderClick);
+    elements.dataTableHeader.addEventListener("mousedown", handleHeaderMouseDown);
     elements.detailsPanel.addEventListener("change", (event) => {
         void handleDetailsChange(event);
     });
@@ -2214,13 +2395,14 @@ function bindEvents() {
         );
     });
     elements.dataTableViewport.addEventListener("scroll", renderVirtualRows);
+    elements.workspaceSplitter?.addEventListener("mousedown", (event) => startResize("vertical", event));
+    elements.errorsSplitter?.addEventListener("mousedown", (event) => startResize("horizontal", event));
 }
 
 async function init() {
     bindEvents();
     await reloadBootstrap();
     switchRightTab(state.activeRightTab);
-    setStatus("Рабочая область готова.", "success");
 }
 
 init().catch(() => {

@@ -8,27 +8,24 @@
 </head>
 <body>
     <div class="page-shell">
-        <aside class="sidebar" id="sidebar">
-            <div>
-                <p class="eyebrow">Спринт 6</p>
-                <h1>RBX_FAKT_MANAG</h1>
-                <p class="sidebar-text">Инструкции, журнал событий и финальная доводка MVP поверх рабочего контура загрузки, обработки и сохранения.</p>
+        <header class="main-header">
+            <div class="main-header-title">
+                <span class="eyebrow">Система управления фактами</span>
             </div>
-
-            <nav class="tab-nav" aria-label="Основные разделы">
+            <nav class="tab-nav-horizontal" aria-label="Основные разделы">
                 <button class="tab-button active" data-tab="overview">Обзор</button>
-                <button class="tab-button" data-tab="analysis">Загрузка фактов</button>
+                <button class="tab-button" data-tab="facts">Загрузка фактов</button>
+                <button class="tab-button" data-tab="analysis">Анализ</button>
                 <button class="tab-button" data-tab="settings">Настройки</button>
                 <button class="tab-button" data-tab="instructions">Инструкции</button>
                 <button class="tab-button" data-tab="journal">Журнал</button>
                 <button class="tab-button" data-tab="reserve">Резерв</button>
             </nav>
-        </aside>
+        </header>
 
         <main class="workspace">
             <header class="workspace-header">
                 <div>
-                    <p class="eyebrow">MVP</p>
                     <h2 id="active-tab-title">Обзор</h2>
                 </div>
                 <div class="workspace-actions">
@@ -66,16 +63,12 @@
                 </div>
             </section>
 
-            <section class="tab-panel" data-panel="analysis">
+            <section class="tab-panel" data-panel="facts">
                 <article class="card workbench-card">
-                    <div class="section-head">
-                        <div>
-                            <p class="eyebrow">Рабочая область</p>
-                            <h3>Загрузка фактов</h3>
-                        </div>
+                    <div class="service-status-row">
+                        <div id="service-message" class="service-message info">Файл не выбран.</div>
+                        <div id="mini-ready-indicator" class="mini-ready-indicator">Готово к работе</div>
                     </div>
-
-                    <div id="service-message" class="service-message info">Файл не выбран.</div>
 
                     <div class="action-bar">
                         <label class="toolbar-field">
@@ -90,27 +83,103 @@
                             <input type="checkbox" id="display-all-toggle">
                             <span>Отобразить все</span>
                         </label>
+                        <label class="checkbox-row action-checkbox">
+                            <input type="checkbox" id="errors-visible">
+                            <span>Ошибки</span>
+                        </label>
                     </div>
 
-                    <div id="dataset-stats" class="dataset-stats"></div>
+                    <div class="data-stats-row" id="data-stats-row">
+                        <span id="stat-total-rows">Строк всего: 0</span>
+                        <span id="stat-filtered-rows">После фильтра: 0</span>
+                        <span id="stat-visible-rows">Показано: 0</span>
+                        <span id="stat-visible-cols">Видимых столбцов: 0</span>
+                        <span id="stat-warnings">Предупреждения: 0</span>
+                        <span id="stat-errors">Ошибки: 0</span>
+                    </div>
 
                     <div class="data-workspace">
-                        <div class="data-table-card">
-                            <div id="data-empty-state" class="data-empty-state">
-                                Загрузите CSV- или XLSX-файл, чтобы увидеть таблицу данных. Шаблон можно выбрать заранее, но это не обязательно.
-                            </div>
-                            <div id="data-table-shell" class="data-table-shell hidden">
-                                <div id="data-table-header" class="data-table-header"></div>
-                                <div id="data-table-viewport" class="data-table-viewport">
-                                    <div id="data-table-spacer-top"></div>
-                                    <div id="data-table-rows" class="data-table-rows"></div>
-                                    <div id="data-table-spacer-bottom"></div>
+                        <div class="data-main-pane">
+                            <div class="data-table-card">
+                                <div id="data-empty-state" class="data-empty-state">
+                                    Загрузите CSV- или XLSX-файл, чтобы увидеть таблицу данных. Шаблон можно выбрать заранее, но это не обязательно.
+                                </div>
+                                <div id="data-table-shell" class="data-table-shell hidden">
+                                    <div id="data-table-header" class="data-table-header"></div>
+                                    <div id="data-table-viewport" class="data-table-viewport">
+                                        <div id="data-table-spacer-top"></div>
+                                        <div id="data-table-rows" class="data-table-rows"></div>
+                                        <div id="data-table-spacer-bottom"></div>
+                                    </div>
                                 </div>
                             </div>
+
+                            <div class="pane-splitter horizontal" id="errors-splitter" aria-hidden="true"></div>
+
+                            <section class="errors-panel" id="errors-panel">
+                                <div class="errors-head">
+                                    <h3>Панель ошибок</h3>
+                                    <span id="issues-summary">Ошибок и предупреждений пока нет.</span>
+                                </div>
+                                <div id="issues-list" class="issues-list"></div>
+                                <p id="errors-panel-message">После загрузки CSV здесь появятся предупреждения и ошибки валидации.</p>
+                            </section>
                         </div>
+
+                        <div class="pane-splitter vertical" id="workspace-splitter" aria-hidden="true"></div>
+
+                        <aside class="details-panel" id="details-panel">
+                            <article class="card sticky-card right-panel-card">
+                                <p class="eyebrow">Настройка данных</p>
+                                <h3>Правая панель</h3>
+                                <div class="mini-stats compact-mini-stats">
+                                    <div>
+                                        <span>Шаблонов</span>
+                                        <strong id="template-count">0</strong>
+                                    </div>
+                                    <div>
+                                        <span>Столбцов</span>
+                                        <strong id="column-count">0</strong>
+                                    </div>
+                                </div>
+
+                                <div class="right-tabs" role="tablist" aria-label="Вкладки настройки данных">
+                                    <button type="button" class="right-tab-button active" data-right-tab="general">Общие</button>
+                                    <button type="button" class="right-tab-button" data-right-tab="columns">Столбцы</button>
+                                    <button type="button" class="right-tab-button" data-right-tab="filters">Фильтры</button>
+                                    <button type="button" class="right-tab-button" data-right-tab="types">Типы</button>
+                                    <button type="button" class="right-tab-button" data-right-tab="processing">Обработка</button>
+                                </div>
+
+                                <div class="right-tab-panels">
+                                    <section class="right-tab-panel active" data-right-panel="general">
+                                        <div id="general-panel-content"></div>
+                                    </section>
+                                    <section class="right-tab-panel" data-right-panel="columns">
+                                        <div id="columns-panel-content"></div>
+                                    </section>
+                                    <section class="right-tab-panel" data-right-panel="filters">
+                                        <div id="filters-panel-content"></div>
+                                    </section>
+                                    <section class="right-tab-panel" data-right-panel="types">
+                                        <div id="types-panel-content"></div>
+                                    </section>
+                                    <section class="right-tab-panel" data-right-panel="processing">
+                                        <div id="processing-panel-content"></div>
+                                    </section>
+                                </div>
+                            </article>
+                        </aside>
                     </div>
 
                     <input type="file" id="csv-file-input" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
+                </article>
+            </section>
+
+            <section class="tab-panel" data-panel="analysis">
+                <article class="card placeholder-card">
+                    <h3>Анализ</h3>
+                    <p>Вкладка анализа сохранена в составе интерфейса и пока реализована как заглушка в рамках MVP.</p>
                 </article>
             </section>
 
@@ -159,10 +228,6 @@
                             <label class="checkbox-row">
                                 <input type="checkbox" id="right-panel-visible">
                                 <span>Показывать правую панель</span>
-                            </label>
-                            <label class="checkbox-row">
-                                <input type="checkbox" id="errors-visible">
-                                <span>Показывать панель ошибок</span>
                             </label>
                             <label>
                                 <span>Высота панели ошибок</span>
@@ -251,58 +316,7 @@
             </section>
         </main>
 
-        <aside class="details-panel" id="details-panel">
-            <article class="card sticky-card right-panel-card">
-                <p class="eyebrow">Настройка данных</p>
-                <h3>Правая панель</h3>
-                <div class="mini-stats compact-mini-stats">
-                    <div>
-                        <span>Шаблонов</span>
-                        <strong id="template-count">0</strong>
-                    </div>
-                    <div>
-                        <span>Столбцов</span>
-                        <strong id="column-count">0</strong>
-                    </div>
-                </div>
-
-                <div class="right-tabs" role="tablist" aria-label="Вкладки настройки данных">
-                    <button type="button" class="right-tab-button active" data-right-tab="general">Общие</button>
-                    <button type="button" class="right-tab-button" data-right-tab="columns">Столбцы</button>
-                    <button type="button" class="right-tab-button" data-right-tab="filters">Фильтры</button>
-                    <button type="button" class="right-tab-button" data-right-tab="types">Типы</button>
-                    <button type="button" class="right-tab-button" data-right-tab="processing">Обработка</button>
-                </div>
-
-                <div class="right-tab-panels">
-                    <section class="right-tab-panel active" data-right-panel="general">
-                        <div id="general-panel-content"></div>
-                    </section>
-                    <section class="right-tab-panel" data-right-panel="columns">
-                        <div id="columns-panel-content"></div>
-                    </section>
-                    <section class="right-tab-panel" data-right-panel="filters">
-                        <div id="filters-panel-content"></div>
-                    </section>
-                    <section class="right-tab-panel" data-right-panel="types">
-                        <div id="types-panel-content"></div>
-                    </section>
-                    <section class="right-tab-panel" data-right-panel="processing">
-                        <div id="processing-panel-content"></div>
-                    </section>
-                </div>
-            </article>
-        </aside>
     </div>
-
-    <section class="errors-panel" id="errors-panel">
-        <div class="errors-head">
-            <h3>Панель ошибок</h3>
-            <span id="issues-summary">Ошибок и предупреждений пока нет.</span>
-        </div>
-        <div id="issues-list" class="issues-list"></div>
-        <p id="errors-panel-message">После загрузки CSV здесь появятся предупреждения и ошибки валидации.</p>
-    </section>
 
     <script src="/app.js"></script>
 </body>
