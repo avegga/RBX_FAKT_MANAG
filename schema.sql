@@ -1,39 +1,35 @@
-# Example database schema
+-- RBX_FAKT_MANAG schema
 
-# Table: templates
-CREATE TABLE templates (
+CREATE TABLE IF NOT EXISTS templates (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    name TEXT NOT NULL UNIQUE,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-# Table: template_columns
-CREATE TABLE template_columns (
+CREATE TABLE IF NOT EXISTS template_columns (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     template_id INTEGER NOT NULL,
     column_name TEXT NOT NULL,
     column_type TEXT NOT NULL,
-    FOREIGN KEY (template_id) REFERENCES templates (id)
+    position INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (template_id) REFERENCES templates (id) ON DELETE CASCADE
 );
 
-# Table: app_settings
-CREATE TABLE app_settings (
+CREATE TABLE IF NOT EXISTS app_settings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    key TEXT NOT NULL,
-    value TEXT NOT NULL
+    key TEXT NOT NULL UNIQUE,
+    value TEXT NOT NULL DEFAULT ''
 );
 
-# Table: app_state
-CREATE TABLE app_state (
+CREATE TABLE IF NOT EXISTS app_state (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    state_key TEXT NOT NULL,
-    state_value TEXT NOT NULL
+    state_key TEXT NOT NULL UNIQUE,
+    state_value TEXT NOT NULL DEFAULT ''
 );
 
-# Table: event_log
-CREATE TABLE event_log (
+CREATE TABLE IF NOT EXISTS event_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     event_type TEXT NOT NULL,
-    event_description TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    event_description TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

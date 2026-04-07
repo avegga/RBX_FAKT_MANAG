@@ -1,19 +1,22 @@
 import sqlite3
+from pathlib import Path
 
-# Initialize the database
-connection = sqlite3.connect('rbx_fakt_manag.db')
-cursor = connection.cursor()
 
-# Read schema from file
-with open('schema.sql', 'r', encoding='utf-8') as schema_file:
-    schema_lines = schema_file.readlines()
+BASE_DIR = Path(__file__).resolve().parent
 
-# Filter out comments
-schema = ''.join(line for line in schema_lines if not line.strip().startswith('#'))
 
-# Execute schema
-cursor.executescript(schema)
+def main():
+    connection = sqlite3.connect(BASE_DIR / "rbx_fakt_manag.db")
+    cursor = connection.cursor()
 
-# Commit and close
-connection.commit()
-connection.close()
+    with open(BASE_DIR / "schema.sql", "r", encoding="utf-8") as schema_file:
+        schema = schema_file.read()
+
+    cursor.executescript(schema)
+    connection.commit()
+    connection.close()
+    print("Database schema initialized.")
+
+
+if __name__ == "__main__":
+    main()

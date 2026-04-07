@@ -1,50 +1,229 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>RBX_FAKT_MANAG</title>
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-    <header>
-        <h1>RBX_FAKT_MANAG</h1>
-        <nav>
-            <ul>
-                <li><a href="#">Главная</a></li>
-                <li><a href="#">Анализ</a></li>
-                <li><a href="#">Инструкции</a></li>
-                <li><a href="#">Журнал</a></li>
-                <li><a href="#">Настройки</a></li>
-                <li><a href="#">Резерв</a></li>
-            </ul>
-        </nav>
-    </header>
-    <main>
-        <p>Добро пожаловать в RBX_FAKT_MANAG!</p>
-        <section id="analysis">
-            <h2>Анализ</h2>
-            <p>Содержимое вкладки Анализ.</p>
-        </section>
-        <section id="instructions">
-            <h2>Инструкции</h2>
-            <p>Содержимое вкладки Инструкции.</p>
-        </section>
-        <section id="journal">
-            <h2>Журнал</h2>
-            <p>Содержимое вкладки Журнал.</p>
-        </section>
-        <section id="settings">
-            <h2>Настройки</h2>
-            <p>Содержимое вкладки Настройки.</p>
-        </section>
-        <section id="reserve">
-            <h2>Резерв</h2>
-            <p>Содержимое вкладки Резерв.</p>
-        </section>
-    </main>
-    <footer>
-        <p>&copy; 2026 RBX_FAKT_MANAG</p>
-    </footer>
+    <div class="page-shell">
+        <aside class="sidebar" id="sidebar">
+            <div>
+                <p class="eyebrow">Спринт 2</p>
+                <h1>RBX_FAKT_MANAG</h1>
+                <p class="sidebar-text">Управление настройками, шаблонами и состоянием интерфейса.</p>
+            </div>
+
+            <nav class="tab-nav" aria-label="Основные разделы">
+                <button class="tab-button active" data-tab="overview">Обзор</button>
+                <button class="tab-button" data-tab="settings">Настройки</button>
+                <button class="tab-button" data-tab="analysis">Анализ</button>
+                <button class="tab-button" data-tab="instructions">Инструкции</button>
+                <button class="tab-button" data-tab="journal">Журнал</button>
+                <button class="tab-button" data-tab="reserve">Резерв</button>
+            </nav>
+        </aside>
+
+        <main class="workspace">
+            <header class="workspace-header">
+                <div>
+                    <p class="eyebrow">MVP</p>
+                    <h2 id="active-tab-title">Обзор</h2>
+                </div>
+                <div class="workspace-actions">
+                    <span class="status-pill" id="save-status">Готово к работе</span>
+                </div>
+            </header>
+
+            <section class="tab-panel active" data-panel="overview">
+                <div class="hero-card">
+                    <h3>Основа второго спринта</h3>
+                    <p>В этом режиме доступны рабочие настройки приложения, управление шаблонами и сохранение состояния интерфейса между сессиями.</p>
+                </div>
+
+                <div class="card-grid two-columns">
+                    <article class="card">
+                        <h3>Что уже работает</h3>
+                        <ul class="feature-list">
+                            <li>Сохранение путей приложения</li>
+                            <li>Создание, переименование и удаление шаблонов</li>
+                            <li>Хранение типов столбцов шаблона</li>
+                            <li>Сохранение параметров интерфейса</li>
+                        </ul>
+                    </article>
+
+                    <article class="card">
+                        <h3>Текущее состояние</h3>
+                        <dl class="summary-list">
+                            <div><dt>Последний шаблон</dt><dd id="last-template-label">Не выбран</dd></div>
+                            <div><dt>Последний файл</dt><dd id="last-file-label">Не задан</dd></div>
+                            <div><dt>Правая панель</dt><dd id="right-panel-label">Включена</dd></div>
+                            <div><dt>Панель ошибок</dt><dd id="errors-panel-label">Включена</dd></div>
+                        </dl>
+                    </article>
+                </div>
+            </section>
+
+            <section class="tab-panel" data-panel="settings">
+                <div class="card-grid">
+                    <article class="card">
+                        <div class="section-head">
+                            <div>
+                                <p class="eyebrow">Пути</p>
+                                <h3>Настройки приложения</h3>
+                            </div>
+                        </div>
+
+                        <form id="settings-form" class="stack-form">
+                            <label>
+                                <span>Папка источника</span>
+                                <input type="text" name="source_folder" placeholder="D:/data/source">
+                            </label>
+                            <label>
+                                <span>Папка результата</span>
+                                <input type="text" name="output_folder" placeholder="D:/data/output">
+                            </label>
+                            <label>
+                                <span>Файл инструкций</span>
+                                <input type="text" name="instructions_file" placeholder="D:/docs/instructions.txt">
+                            </label>
+                            <div class="form-actions">
+                                <button type="submit" class="primary-button">Сохранить настройки</button>
+                            </div>
+                            <div id="settings-errors" class="form-errors"></div>
+                        </form>
+                    </article>
+
+                    <article class="card">
+                        <div class="section-head">
+                            <div>
+                                <p class="eyebrow">Интерфейс</p>
+                                <h3>Состояние между сессиями</h3>
+                            </div>
+                        </div>
+
+                        <form id="state-form" class="stack-form compact-form">
+                            <label>
+                                <span>Ширина левой панели</span>
+                                <input type="range" id="left-panel-width" min="220" max="420" step="10">
+                            </label>
+                            <label class="checkbox-row">
+                                <input type="checkbox" id="right-panel-visible">
+                                <span>Показывать правую панель</span>
+                            </label>
+                            <label class="checkbox-row">
+                                <input type="checkbox" id="errors-visible">
+                                <span>Показывать панель ошибок</span>
+                            </label>
+                            <label>
+                                <span>Высота панели ошибок</span>
+                                <input type="range" id="errors-height" min="120" max="320" step="10">
+                            </label>
+                            <label>
+                                <span>Последний успешно загруженный файл</span>
+                                <input type="text" id="last-loaded-file" placeholder="facts_2026_04_07.csv">
+                            </label>
+                        </form>
+                    </article>
+                </div>
+
+                <article class="card template-card">
+                    <div class="section-head">
+                        <div>
+                            <p class="eyebrow">Шаблоны</p>
+                            <h3>CRUD шаблонов и типы столбцов</h3>
+                        </div>
+                        <button id="new-template-button" class="secondary-button">Новый шаблон</button>
+                    </div>
+
+                    <div class="template-layout">
+                        <div class="template-list-wrap">
+                            <ul class="template-list" id="template-list"></ul>
+                        </div>
+
+                        <div class="template-editor">
+                            <form id="template-form" class="stack-form">
+                                <input type="hidden" id="template-id">
+                                <label>
+                                    <span>Название шаблона</span>
+                                    <input type="text" id="template-name" placeholder="Например: Каталог товаров">
+                                </label>
+
+                                <div class="columns-header">
+                                    <h4>Столбцы шаблона</h4>
+                                    <button type="button" id="add-column-button" class="secondary-button">Добавить столбец</button>
+                                </div>
+                                <div id="columns-container" class="columns-container"></div>
+
+                                <div class="form-actions split-actions">
+                                    <button type="submit" class="primary-button">Сохранить шаблон</button>
+                                    <button type="button" id="delete-template-button" class="danger-button">Удалить шаблон</button>
+                                </div>
+                                <div id="template-errors" class="form-errors"></div>
+                            </form>
+                        </div>
+                    </div>
+                </article>
+            </section>
+
+            <section class="tab-panel" data-panel="analysis">
+                <article class="card placeholder-card">
+                    <h3>Анализ</h3>
+                    <p>Раздел подготовлен как точка входа для загрузки фактов и отображения сводки в следующем спринте.</p>
+                </article>
+            </section>
+
+            <section class="tab-panel" data-panel="instructions">
+                <article class="card placeholder-card">
+                    <h3>Инструкции</h3>
+                    <p>Здесь будет подключён файл инструкций и его рабочее отображение.</p>
+                </article>
+            </section>
+
+            <section class="tab-panel" data-panel="journal">
+                <article class="card placeholder-card">
+                    <h3>Журнал</h3>
+                    <p>Ниже выводятся последние события приложения, связанные с настройками и шаблонами.</p>
+                    <div id="journal-list" class="journal-list"></div>
+                </article>
+            </section>
+
+            <section class="tab-panel" data-panel="reserve">
+                <article class="card placeholder-card">
+                    <h3>Резерв</h3>
+                    <p>Резервный раздел остаётся доступным в общей навигации и сохранён в каркасе интерфейса.</p>
+                </article>
+            </section>
+        </main>
+
+        <aside class="details-panel" id="details-panel">
+            <article class="card sticky-card">
+                <p class="eyebrow">Сводка</p>
+                <h3>Интерфейс</h3>
+                <p>Правая панель участвует в сохранении состояния между сессиями и помогает быстро видеть активный контекст.</p>
+                <div class="mini-stats">
+                    <div>
+                        <span>Шаблонов</span>
+                        <strong id="template-count">0</strong>
+                    </div>
+                    <div>
+                        <span>Столбцов в шаблоне</span>
+                        <strong id="column-count">0</strong>
+                    </div>
+                </div>
+            </article>
+        </aside>
+    </div>
+
+    <section class="errors-panel" id="errors-panel">
+        <div class="errors-head">
+            <h3>Панель ошибок</h3>
+            <span>Высота и видимость сохраняются в базе</span>
+        </div>
+        <p id="errors-panel-message">Ошибок нет. Панель готова для следующего спринта.</p>
+    </section>
+
+    <script src="/app.js"></script>
 </body>
 </html>
