@@ -10,15 +10,15 @@
     <div class="page-shell">
         <aside class="sidebar" id="sidebar">
             <div>
-                <p class="eyebrow">Спринт 2</p>
+                <p class="eyebrow">Спринт 4</p>
                 <h1>RBX_FAKT_MANAG</h1>
-                <p class="sidebar-text">Управление настройками, шаблонами и состоянием интерфейса.</p>
+                <p class="sidebar-text">Типы, фильтры, порядок столбцов, сортировка и пересчёт ошибок по рабочему набору.</p>
             </div>
 
             <nav class="tab-nav" aria-label="Основные разделы">
                 <button class="tab-button active" data-tab="overview">Обзор</button>
+                <button class="tab-button" data-tab="analysis">Загрузка фактов</button>
                 <button class="tab-button" data-tab="settings">Настройки</button>
-                <button class="tab-button" data-tab="analysis">Анализ</button>
                 <button class="tab-button" data-tab="instructions">Инструкции</button>
                 <button class="tab-button" data-tab="journal">Журнал</button>
                 <button class="tab-button" data-tab="reserve">Резерв</button>
@@ -38,18 +38,18 @@
 
             <section class="tab-panel active" data-panel="overview">
                 <div class="hero-card">
-                    <h3>Основа второго спринта</h3>
-                    <p>В этом режиме доступны рабочие настройки приложения, управление шаблонами и сохранение состояния интерфейса между сессиями.</p>
+                    <h3>Рабочий сценарий управления данными</h3>
+                    <p>После загрузки CSV пользователь может управлять типами столбцов, фильтрами, порядком отображения и сортировкой без потери полного рабочего набора.</p>
                 </div>
 
                 <div class="card-grid two-columns">
                     <article class="card">
                         <h3>Что уже работает</h3>
                         <ul class="feature-list">
-                            <li>Сохранение путей приложения</li>
-                            <li>Создание, переименование и удаление шаблонов</li>
-                            <li>Хранение типов столбцов шаблона</li>
-                            <li>Сохранение параметров интерфейса</li>
+                            <li>Назначение типов и автосохранение в шаблон</li>
+                            <li>Фильтрация по типам на полном рабочем наборе</li>
+                            <li>Видимость и порядок столбцов с мгновенным применением</li>
+                            <li>Сортировка таблицы и подсветка ошибочных ячеек</li>
                         </ul>
                     </article>
 
@@ -63,6 +63,54 @@
                         </dl>
                     </article>
                 </div>
+            </section>
+
+            <section class="tab-panel" data-panel="analysis">
+                <article class="card workbench-card">
+                    <div class="section-head">
+                        <div>
+                            <p class="eyebrow">Рабочая область</p>
+                            <h3>Загрузка фактов</h3>
+                        </div>
+                    </div>
+
+                    <div id="service-message" class="service-message info">Файл не выбран.</div>
+
+                    <div class="action-bar">
+                        <label class="toolbar-field">
+                            <span>Шаблон</span>
+                            <select id="upload-template-select"></select>
+                        </label>
+                        <div class="toolbar-file" id="current-file-name">Файл не выбран</div>
+                        <button type="button" id="upload-button" class="primary-button">Загрузить</button>
+                        <button type="button" id="export-button" class="secondary-button">Сохранить</button>
+                        <button type="button" id="toggle-right-panel-button" class="secondary-button">Скрыть панель</button>
+                        <label class="checkbox-row action-checkbox">
+                            <input type="checkbox" id="display-all-toggle">
+                            <span>Отобразить все</span>
+                        </label>
+                    </div>
+
+                    <div id="dataset-stats" class="dataset-stats"></div>
+
+                    <div class="data-workspace">
+                        <div class="data-table-card">
+                            <div id="data-empty-state" class="data-empty-state">
+                                Выберите шаблон и загрузите CSV-файл, чтобы увидеть таблицу данных.
+                            </div>
+                            <div id="data-table-shell" class="data-table-shell hidden">
+                                <div id="data-table-header" class="data-table-header"></div>
+                                <div id="data-table-viewport" class="data-table-viewport">
+                                    <div id="data-table-spacer-top"></div>
+                                    <div id="data-table-rows" class="data-table-rows"></div>
+                                    <div id="data-table-spacer-bottom"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <input type="file" id="csv-file-input" accept=".csv,text/csv" hidden>
+                </article>
             </section>
 
             <section class="tab-panel" data-panel="settings">
@@ -167,13 +215,6 @@
                 </article>
             </section>
 
-            <section class="tab-panel" data-panel="analysis">
-                <article class="card placeholder-card">
-                    <h3>Анализ</h3>
-                    <p>Раздел подготовлен как точка входа для загрузки фактов и отображения сводки в следующем спринте.</p>
-                </article>
-            </section>
-
             <section class="tab-panel" data-panel="instructions">
                 <article class="card placeholder-card">
                     <h3>Инструкции</h3>
@@ -198,19 +239,44 @@
         </main>
 
         <aside class="details-panel" id="details-panel">
-            <article class="card sticky-card">
-                <p class="eyebrow">Сводка</p>
-                <h3>Интерфейс</h3>
-                <p>Правая панель участвует в сохранении состояния между сессиями и помогает быстро видеть активный контекст.</p>
-                <div class="mini-stats">
+            <article class="card sticky-card right-panel-card">
+                <p class="eyebrow">Настройка данных</p>
+                <h3>Правая панель</h3>
+                <div class="mini-stats compact-mini-stats">
                     <div>
                         <span>Шаблонов</span>
                         <strong id="template-count">0</strong>
                     </div>
                     <div>
-                        <span>Столбцов в шаблоне</span>
+                        <span>Столбцов</span>
                         <strong id="column-count">0</strong>
                     </div>
+                </div>
+
+                <div class="right-tabs" role="tablist" aria-label="Вкладки настройки данных">
+                    <button type="button" class="right-tab-button active" data-right-tab="general">Общие</button>
+                    <button type="button" class="right-tab-button" data-right-tab="columns">Столбцы</button>
+                    <button type="button" class="right-tab-button" data-right-tab="filters">Фильтры</button>
+                    <button type="button" class="right-tab-button" data-right-tab="types">Типы</button>
+                    <button type="button" class="right-tab-button" data-right-tab="processing">Обработка</button>
+                </div>
+
+                <div class="right-tab-panels">
+                    <section class="right-tab-panel active" data-right-panel="general">
+                        <div id="general-panel-content"></div>
+                    </section>
+                    <section class="right-tab-panel" data-right-panel="columns">
+                        <div id="columns-panel-content"></div>
+                    </section>
+                    <section class="right-tab-panel" data-right-panel="filters">
+                        <div id="filters-panel-content"></div>
+                    </section>
+                    <section class="right-tab-panel" data-right-panel="types">
+                        <div id="types-panel-content"></div>
+                    </section>
+                    <section class="right-tab-panel" data-right-panel="processing">
+                        <div id="processing-panel-content"></div>
+                    </section>
                 </div>
             </article>
         </aside>
@@ -219,9 +285,10 @@
     <section class="errors-panel" id="errors-panel">
         <div class="errors-head">
             <h3>Панель ошибок</h3>
-            <span>Высота и видимость сохраняются в базе</span>
+            <span id="issues-summary">Ошибок и предупреждений пока нет.</span>
         </div>
-        <p id="errors-panel-message">Ошибок нет. Панель готова для следующего спринта.</p>
+        <div id="issues-list" class="issues-list"></div>
+        <p id="errors-panel-message">После загрузки CSV здесь появятся предупреждения и ошибки валидации.</p>
     </section>
 
     <script src="/app.js"></script>

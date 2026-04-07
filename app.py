@@ -1,4 +1,8 @@
+import csv
+import io
 import json
+import re
+from datetime import datetime
 from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory
@@ -16,6 +20,18 @@ DEFAULT_STATE = {
     "last_template_id": None,
     "last_loaded_file": "",
 }
+EMPTY_DATASET = {
+    "file_name": "",
+    "columns": [],
+    "rows": [],
+    "warnings": [],
+    "errors": [],
+    "partial": False,
+    "missing_columns": [],
+    "row_count": 0,
+    "template": None,
+}
+CURRENT_DATASET = dict(EMPTY_DATASET)
 
 app = Flask(__name__)
 app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///rbx_fakt_manag.db"
@@ -128,6 +144,219 @@ def log_event(event_type, description):
     db.session.add(EventLog(event_type=event_type, event_description=description))
 
 
+def serialize_dataset():
+    return CURRENT_DATASET
+
+
+def normalize_header_name(raw_name, index):
+    normalized = (raw_name or "").strip()
+    if normalized:
+        return normalized
+    return f"Столбец_{index + 1}"
+
+
+def uniquify_headers(headers):
+    seen = {}
+    result = []
+    warnings = []
+
+    for index, raw_name in enumerate(headers):
+        base_name = normalize_header_name(raw_name, index)
+        count = seen.get(base_name.lower(), 0) + 1
+        seen[base_name.lower()] = count
+        if count == 1:
+            unique_name = base_name
+        else:
+            unique_name = f"{base_name}_{count}"
+            warnings.append(
+                f"Дублирующийся столбец '{base_name}' переименован в '{unique_name}'."
+            )
+        if not (raw_name or "").strip():
+            warnings.append(f"Пустой заголовок столбца заменён на '{unique_name}'.")
+        result.append(unique_name)
+
+    return result, warnings
+
+
+def parse_decimal(value):
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+
+    if not re.fullmatch(r"[+-]?(?:\d+|\d{1,3}(?: \d{3})+)(?:\.\d+)?", normalized):
+        raise ValueError("invalid decimal")
+
+    return float(normalized.replace(" ", ""))
+
+
+def parse_boolean(value):
+    normalized = str(value).strip().lower()
+    if normalized in {"true", "yes", "да", "1", "истина"}:
+        return True
+    if normalized in {"false", "no", "нет", "0", "ложь"}:
+        return False
+    raise ValueError("invalid boolean")
+
+
+def validate_value(value, column_type):
+    raw_value = (value or "").strip()
+    if column_type == "text":
+        return None
+
+    try:
+        if column_type in {"number", "money"}:
+            if not raw_value:
+                return "пустое значение трактуется как 0"
+            parse_decimal(raw_value)
+            return None
+        if column_type == "boolean":
+            if not raw_value:
+                return "пустое значение трактуется как Нет"
+            parse_boolean(raw_value)
+            return None
+        if column_type == "date":
+            if not raw_value:
+                return "пустое значение трактуется как 01.01.1900"
+            for pattern in ("%Y-%m-%d", "%d.%m.%Y"):
+                try:
+                    datetime.strptime(raw_value, pattern)
+                    return None
+                except ValueError:
+                    continue
+            return "ожидалась дата"
+        if column_type == "datetime":
+            if not raw_value:
+                return "ожидались дата и время"
+            for pattern in (
+                "%d.%m.%Y %H:%M",
+                "%Y-%m-%d %H:%M",
+                "%Y-%m-%dT%H:%M:%S",
+            ):
+                try:
+                    datetime.strptime(raw_value, pattern)
+                    return None
+                except ValueError:
+                    continue
+            return "ожидались дата и время"
+    except ValueError:
+        if column_type in {"number", "money"}:
+            return "ожидалось числовое значение"
+        if column_type == "boolean":
+            return "ожидалось логическое значение"
+
+    return None
+
+
+def build_dataset(file_storage, template):
+    if file_storage is None:
+        raise ValueError("Файл не выбран.")
+
+    file_name = Path(file_storage.filename or "").name
+    if not file_name:
+        raise ValueError("Файл не выбран.")
+    if Path(file_name).suffix.lower() != ".csv":
+        raise ValueError("Поддерживаются только CSV-файлы.")
+
+    try:
+        decoded = file_storage.read().decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ValueError("Файл должен быть в кодировке UTF-8 with BOM.") from exc
+
+    reader = csv.reader(io.StringIO(decoded), delimiter=";")
+    header = None
+    header_row_number = None
+    warnings = []
+    rows = []
+
+    for row_number, row in enumerate(reader, start=1):
+        if header is None and not any((cell or "").strip() for cell in row):
+            continue
+        if header is None:
+            header_row_number = row_number
+            header, header_warnings = uniquify_headers(row)
+            warnings.extend(header_warnings)
+            continue
+
+        values = list(row)
+        if len(values) < len(header):
+            values.extend([""] * (len(header) - len(values)))
+        elif len(values) > len(header):
+            warnings.append(
+                f"Строка {row_number}: лишние значения после столбца '{header[-1]}' были отброшены."
+            )
+            values = values[: len(header)]
+
+        rows.append(
+            {
+                "row_number": len(rows) + 1,
+                "source_row_number": row_number,
+                "values": {column_name: values[index] for index, column_name in enumerate(header)},
+            }
+        )
+
+    if header is None:
+        raise ValueError("В CSV не найден заголовок.")
+
+    template_columns = template.columns if template else []
+    template_types = {column.column_name.lower(): column.column_type for column in template_columns}
+    expected_columns = [column.column_name for column in template_columns]
+    missing_columns = [name for name in expected_columns if name.lower() not in {item.lower() for item in header}]
+    partial = bool(missing_columns)
+    if missing_columns:
+        warnings.append(
+            "Частичная загрузка: отсутствуют ожидаемые столбцы шаблона: " + ", ".join(missing_columns)
+        )
+
+    known_template_columns = {column.column_name.lower() for column in template_columns}
+    for column_name in header:
+        if template and column_name.lower() not in known_template_columns:
+            warnings.append(
+                f"Новый столбец '{column_name}' не найден в шаблоне и получил тип text по умолчанию."
+            )
+
+    columns = []
+    for position, column_name in enumerate(header):
+        column_type = template_types.get(column_name.lower(), "text")
+        columns.append(
+            {
+                "name": column_name,
+                "type": column_type,
+                "position": position,
+                "from_template": column_name.lower() in template_types,
+            }
+        )
+
+    errors = []
+    for row in rows:
+        for column in columns:
+            value = row["values"].get(column["name"], "")
+            reason = validate_value(value, column["type"])
+            if reason:
+                errors.append(
+                    {
+                        "row_number": row["row_number"],
+                        "source_row_number": row["source_row_number"],
+                        "column_name": column["name"],
+                        "column_type": column["type"],
+                        "value": value,
+                        "reason": reason,
+                    }
+                )
+
+    return {
+        "file_name": file_name,
+        "header_row_number": header_row_number,
+        "columns": columns,
+        "rows": rows,
+        "warnings": warnings,
+        "errors": errors,
+        "partial": partial,
+        "missing_columns": missing_columns,
+        "row_count": len(rows),
+        "template": {"id": template.id, "name": template.name} if template else None,
+    }
+
+
 def validate_settings(payload):
     errors = {}
     folder_fields = {
@@ -196,6 +425,7 @@ def bootstrap():
             "settings": get_settings_map(),
             "templates": [serialize_template(item) for item in Template.query.order_by(Template.name).all()],
             "state": get_state_map(),
+            "dataset": serialize_dataset(),
         }
     )
 
@@ -341,6 +571,48 @@ def get_logs():
             for item in logs
         ]
     )
+
+
+@app.get("/api/data/current")
+def get_current_data():
+    return jsonify(serialize_dataset())
+
+
+@app.post("/api/data/upload")
+def upload_data():
+    file_storage = request.files.get("file")
+    template_id = request.form.get("template_id", type=int)
+    template = Template.query.get(template_id) if template_id else None
+
+    try:
+        dataset = build_dataset(file_storage, template)
+    except ValueError as exc:
+        log_event("upload_failed", str(exc))
+        db.session.commit()
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+    CURRENT_DATASET.clear()
+    CURRENT_DATASET.update(dataset)
+
+    error_count = len(dataset["errors"])
+    warning_count = len(dataset["warnings"])
+    if dataset["partial"]:
+        event_type = "upload_partial"
+        description = (
+            f"Файл '{dataset['file_name']}' загружен частично: "
+            f"{dataset['row_count']} строк, {warning_count} предупреждений, {error_count} ошибок."
+        )
+    else:
+        event_type = "upload_success"
+        description = (
+            f"Файл '{dataset['file_name']}' загружен: "
+            f"{dataset['row_count']} строк, {warning_count} предупреждений, {error_count} ошибок."
+        )
+
+    log_event(event_type, description)
+    db.session.commit()
+
+    return jsonify({"ok": True, "dataset": dataset})
 
 
 with app.app_context():
