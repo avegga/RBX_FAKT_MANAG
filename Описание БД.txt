@@ -1,0 +1,151 @@
+# analysis_chart_comments
+| Поле             | Тип         | Описание                                      |
+|------------------|-------------|-----------------------------------------------|
+| id               | INTEGER PK  | Уникальный идентификатор комментария          |
+| analysis_type_id | INTEGER FK  | Ссылка на analysis_types                      |
+| chart_id         | INTEGER FK  | Ссылка на analysis_charts                     |
+| parent_id        | INTEGER FK  | Ссылка на родительский комментарий (NULL для основного) |
+| author           | TEXT        | Автор комментария                             |
+| text             | TEXT        | Текст комментария (до 1000 знаков)            |
+| created_at       | DATETIME    | Дата и время создания                         |
+| updated_at       | DATETIME    | Дата и время последнего редактирования        |
+| is_read          | BOOLEAN     | Признак прочитанности для текущего пользователя|
+
+- В таблице хранятся как основные комментарии, так и ответы (parent_id).
+- Для каждого комментария фиксируются автор, время создания и редактирования.
+- Признак is_read может использоваться для отслеживания новых/непрочитанных комментариев (опционально — отдельная таблица для пользователей).
+- Связь с analysis_type и chart_id обеспечивает уникальность комментариев для каждого графика в каждом типе анализа.
+# Описание структуры базы данных для вкладки "Анализ"
+
+## Общие положения
+База данных для вкладки "Анализ" предназначена для хранения:
+- типов анализа и их конфигураций (наборы графиков, параметры, выбранные поля и т.д.)
+- пользовательских состояний вкладки (последний выбранный тип анализа, размеры областей и т.п.)
+- данных для построения графиков (загруженные или импортированные пользователем таблицы)
+
+В качестве СУБД используется SQLite.
+
+---
+
+## Основные таблицы
+
+### 1. analysis_types
+**Назначение:** Хранение конфигураций типов анализа (наборы графиков, параметры, поля).
+
+| Поле                | Тип         | Описание                                      |
+|---------------------|-------------|-----------------------------------------------|
+| id                  | INTEGER PK  | Уникальный идентификатор типа анализа         |
+| name                | TEXT        | Название типа анализа                         |
+| created_at          | DATETIME    | Дата создания                                 |
+| updated_at          | DATETIME    | Дата последнего изменения                     |
+| config_json         | TEXT        | Конфигурация типа анализа (JSON)              |
+
+### 2. analysis_charts
+**Назначение:** Хранение информации о графиках, входящих в тип анализа.
+
+| Поле                | Тип         | Описание                                      |
+|---------------------|-------------|-----------------------------------------------|
+| id                  | INTEGER PK  | Уникальный идентификатор графика              |
+| analysis_type_id    | INTEGER FK  | Ссылка на analysis_types                      |
+| chart_type          | TEXT        | Тип графика (bar, line, pie, table)           |
+| fields_json         | TEXT        | Выбранные поля, параметры (JSON)              |
+| order_index         | INTEGER     | Порядок отображения                           |
+| position_x          | INTEGER     | Координата X                                  |
+| position_y          | INTEGER     | Координата Y                                  |
+| is_hidden           | BOOLEAN     | Признак скрытого графика                      |
+| compatible          | BOOLEAN     | Совместимость с текущим набором данных        |
+
+### 3. analysis_user_state
+**Назначение:** Хранение пользовательских настроек и состояния вкладки.
+
+| Поле                | Тип         | Описание                                      |
+|---------------------|-------------|-----------------------------------------------|
+| id                  | INTEGER PK  | Уникальный идентификатор                      |
+| user_id             | TEXT        | Идентификатор пользователя (если требуется)   |
+| last_analysis_type  | INTEGER FK  | Последний выбранный тип анализа               |
+| last_data_source    | TEXT        | Последний выбранный источник данных           |
+| left_panel_width    | INTEGER     | Ширина левой области                          |
+| right_panel_width   | INTEGER     | Ширина правой области                         |
+| ui_state_json       | TEXT        | Прочие параметры интерфейса (JSON)            |
+
+### 4. analysis_data_tables
+**Назначение:** Хранение загруженных пользователем таблиц данных для анализа.
+
+| Поле                | Тип         | Описание                                      |
+|---------------------|-------------|-----------------------------------------------|
+| id                  | INTEGER PK  | Уникальный идентификатор                      |
+| analysis_type_id    | INTEGER FK  | Ссылка на analysis_types                      |
+| name                | TEXT        | Название таблицы                              |
+| created_at          | DATETIME    | Дата загрузки                                 |
+| data_blob           | BLOB        | Сырые данные таблицы (CSV, JSON, др.)         |
+| schema_json         | TEXT        | Описание структуры таблицы (JSON)             |
+
+---
+
+## Связи между таблицами
+- analysis_charts.analysis_type_id → analysis_types.id
+- analysis_data_tables.analysis_type_id → analysis_types.id
+- analysis_user_state.last_analysis_type → analysis_types.id
+
+---
+
+## Особенности и требования
+- Все изменения структуры должны сопровождаться миграциями.
+- Для хранения сложных параметров и конфигураций используется формат JSON.
+- При удалении типа анализа каскадно удаляются связанные графики и таблицы данных.
+- Производительность должна обеспечиваться для объёмов до 50 000 строк и 100 столбцов в одной таблице данных.
+- Все пользовательские настройки должны сохраняться между сессиями.
+
+---
+
+## Пример схемы в формате SQL
+
+```sql
+CREATE TABLE analysis_types (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    config_json TEXT
+);
+
+CREATE TABLE analysis_charts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    analysis_type_id INTEGER NOT NULL,
+    chart_type TEXT NOT NULL,
+    fields_json TEXT,
+    order_index INTEGER,
+    position_x INTEGER,
+    position_y INTEGER,
+    is_hidden BOOLEAN DEFAULT 0,
+    compatible BOOLEAN DEFAULT 1,
+    FOREIGN KEY (analysis_type_id) REFERENCES analysis_types(id) ON DELETE CASCADE
+);
+
+CREATE TABLE analysis_user_state (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT,
+    last_analysis_type INTEGER,
+    last_data_source TEXT,
+    left_panel_width INTEGER,
+    right_panel_width INTEGER,
+    ui_state_json TEXT,
+    FOREIGN KEY (last_analysis_type) REFERENCES analysis_types(id)
+);
+
+CREATE TABLE analysis_data_tables (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    analysis_type_id INTEGER NOT NULL,
+    name TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    data_blob BLOB,
+    schema_json TEXT,
+    FOREIGN KEY (analysis_type_id) REFERENCES analysis_types(id) ON DELETE CASCADE
+);
+```
+
+---
+
+## Примечания
+- При необходимости можно добавить таблицы для хранения истории изменений, логов, шаблонов и др.
+- Для интеграции с другими вкладками использовать только явно определённые интерфейсы и сервисы.

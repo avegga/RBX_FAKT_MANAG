@@ -1,3 +1,66 @@
+// --- ANALYSIS SPLITTER LOGIC ---
+const ANALYSIS_SPLITTER_SELECTOR = ".vertical-splitter";
+const ANALYSIS_LEFT_PANEL_SELECTOR = ".analysis-left-panel";
+let analysisSplitterActive = false;
+let analysisSplitterStartX = 0;
+let analysisSplitterStartWidth = 0;
+
+function getAnalysisLeftPanel() {
+    return document.querySelector(ANALYSIS_LEFT_PANEL_SELECTOR);
+}
+function getAnalysisSplitter() {
+    return document.querySelector(ANALYSIS_SPLITTER_SELECTOR);
+}
+
+function setAnalysisLeftWidth(px) {
+    document.documentElement.style.setProperty('--analysis-left-width', `${px}px`);
+    try {
+        localStorage.setItem('analysis-left-width', String(px));
+    } catch {}
+    window.dispatchEvent(new CustomEvent("analysis:left-width-changed", { detail: { width: px } }));
+}
+function getSavedAnalysisLeftWidth() {
+    try {
+        const v = localStorage.getItem('analysis-left-width');
+        return v ? parseInt(v, 10) : 260;
+    } catch { return 260; }
+}
+
+function handleAnalysisSplitterDown(e) {
+    if (e.button !== 0) return;
+    const panel = getAnalysisLeftPanel();
+    if (!panel) return;
+    analysisSplitterActive = true;
+    analysisSplitterStartX = e.clientX;
+    analysisSplitterStartWidth = panel.offsetWidth;
+    document.body.classList.add('is-resizing');
+    window.addEventListener('mousemove', handleAnalysisSplitterMove);
+    window.addEventListener('mouseup', handleAnalysisSplitterUp);
+    e.preventDefault();
+}
+function handleAnalysisSplitterMove(e) {
+    if (!analysisSplitterActive) return;
+    const dx = e.clientX - analysisSplitterStartX;
+    let nextWidth = analysisSplitterStartWidth + dx;
+    if (nextWidth < 60) nextWidth = 60;
+    setAnalysisLeftWidth(nextWidth);
+}
+function handleAnalysisSplitterUp() {
+    if (!analysisSplitterActive) return;
+    analysisSplitterActive = false;
+    document.body.classList.remove('is-resizing');
+    window.removeEventListener('mousemove', handleAnalysisSplitterMove);
+    window.removeEventListener('mouseup', handleAnalysisSplitterUp);
+}
+
+function setupAnalysisSplitter() {
+    const splitter = getAnalysisSplitter();
+    if (!splitter) return;
+    splitter.removeEventListener('mousedown', handleAnalysisSplitterDown);
+    splitter.addEventListener('mousedown', handleAnalysisSplitterDown);
+    // Set initial width from storage
+    setAnalysisLeftWidth(getSavedAnalysisLeftWidth());
+}
 const emptyDataset = () => ({
     file_name: "",
     columns: [],
@@ -65,7 +128,18 @@ const state = {
     journal: emptyJournal(),
 };
 
-const columnTypes = ["text", "number", "money", "date", "datetime", "boolean"];
+const columnTypes = ["text", "choice", "number", "money", "date", "datetime", "boolean"];
+const CHOICE_FILTER_ALL = "";
+const CHOICE_FILTER_EMPTY = "__empty__";
+const columnTypeLabels = {
+    text: "текст",
+    choice: "список выбора",
+    number: "число",
+    money: "денежный",
+    date: "дата",
+    datetime: "дата-время",
+    boolean: "логический",
+};
 const rowHeight = 44;
 const rowOverscan = 8;
 const DEFAULT_COLUMN_WIDTH = 220;
@@ -258,11 +332,12 @@ function switchTab(tabName) {
     });
 
     elements.body.classList.toggle("facts-tab-active", tabName === "facts");
+    elements.body.classList.toggle("analysis-tab-active", tabName === "analysis");
 
     syncSaveStatusWithActiveTab();
 
     const activeButton = elements.tabButtons.find((button) => button.dataset.tab === tabName);
-    if (tabName === "facts") {
+    if (tabName === "facts" || tabName === "analysis") {
         elements.activeTabTitle.textContent = "";
         return;
     }
@@ -284,9 +359,22 @@ function getActiveTemplate() {
     return state.templates.find((item) => item.id === state.activeTemplateId) || null;
 }
 
+function getColumnTypeLabel(type) {
+    return columnTypeLabels[type] || type;
+}
+
+function formatDatasetErrorMessage(error) {
+    const typeLabel = error.column_type ? `, тип ${getColumnTypeLabel(error.column_type)}` : "";
+    const rawValue = error.value ? ` Значение: ${error.value}` : "";
+    return `Строка ${error.row_number}, столбец ${error.column_name}${typeLabel}: ${error.reason}.${rawValue}`;
+}
+
 function createFilterState(type) {
     if (type === "text") {
         return { value: "" };
+    }
+    if (type === "choice") {
+        return { selectedValues: [] };
     }
     if (type === "number" || type === "money") {
         return { operator: "contains", value: "", from: "", to: "" };
@@ -573,7 +661,7 @@ function createColumnRow(column = { name: "", type: "text" }) {
     columnTypes.forEach((type) => {
         const option = document.createElement("option");
         option.value = type;
-        option.textContent = type;
+        option.textContent = getColumnTypeLabel(type);
         option.selected = type === (column.type || "text");
         typeSelect.appendChild(option);
     });
@@ -1064,7 +1152,7 @@ function evaluateCell(rawValue, column) {
         type: column.type,
     };
 
-    if (column.type === "text") {
+    if (column.type === "text" || column.type === "choice") {
         return base;
     }
 
@@ -1183,6 +1271,17 @@ function matchesFilter(cell, filter, column) {
         return !needle || cell.raw.toLowerCase().includes(needle);
     }
 
+    if (column.type === "choice") {
+        const selectedValues = getSelectedChoiceValues(filter);
+        if (!selectedValues.length) {
+            return true;
+        }
+        if (cell.empty) {
+            return selectedValues.includes(CHOICE_FILTER_EMPTY);
+        }
+        return selectedValues.includes(cell.raw);
+    }
+
     if (column.type === "number" || column.type === "money") {
         const operator = filter.operator || "contains";
         if (operator === "contains") {
@@ -1284,7 +1383,7 @@ function compareRows(leftRow, rightRow, column) {
     if (rightCell.comparable === null) {
         return -1;
     }
-    if (column.type === "text") {
+    if (column.type === "text" || column.type === "choice") {
         return leftCell.raw.localeCompare(rightCell.raw, "ru", { sensitivity: "base" }) || leftRow.index - rightRow.index;
     }
     if (leftCell.comparable < rightCell.comparable) {
@@ -1404,7 +1503,7 @@ function renderHeader() {
                 <button type="button" class="table-sort-button" data-action="sort-column" data-column="${escapeHtml(column.name)}">
                     <span>${escapeHtml(column.name)}</span>
                     <span class="header-tools">
-                        <span class="column-badge">${escapeHtml(column.type)}</span>
+                        <span class="column-badge">${escapeHtml(getColumnTypeLabel(column.type))}</span>
                         <span class="sort-indicator">${getSortIndicator(column.name)}</span>
                     </span>
                 </button>
@@ -1552,6 +1651,26 @@ function renderFilterControl(column) {
         `;
     }
 
+    if (column.type === "choice") {
+        const options = getChoiceFilterOptions(column.name);
+        return `
+            <div class="filter-controls">
+                <div class="choice-filter-list">
+                    ${options
+                        .map(
+                            (option) => `
+                                <label class="checkbox-card inline-checkbox choice-filter-option">
+                                    <input type="checkbox" data-action="filter-choice" data-column="${escapeHtml(column.name)}" data-value="${escapeHtml(option.value)}" ${option.checked ? "checked" : ""}>
+                                    <span>${escapeHtml(option.label)}</span>
+                                </label>
+                            `
+                        )
+                        .join("")}
+                </div>
+            </div>
+        `;
+    }
+
     if (column.type === "number" || column.type === "money") {
         return `
             <div class="filter-controls filter-grid">
@@ -1608,7 +1727,7 @@ function renderFiltersPanel() {
                     <div class="control-card control-stack">
                         <div class="filter-head">
                             <strong>${escapeHtml(column.name)}</strong>
-                            <span>${escapeHtml(column.type)}</span>
+                            <span>${escapeHtml(getColumnTypeLabel(column.type))}</span>
                         </div>
                         ${renderFilterControl(column)}
                     </div>
@@ -1616,6 +1735,77 @@ function renderFiltersPanel() {
                 .join("")}
         </div>
     `;
+}
+
+function getChoiceFilterOptions(columnName) {
+    const selectedValues = new Set(getSelectedChoiceValues(state.table.filters[columnName]));
+    const sourceRows = getChoiceFilterSourceRows(columnName);
+    const values = new Set();
+    let hasEmpty = false;
+
+    sourceRows.forEach((row) => {
+        const cell = row.cells[columnName];
+        if (!cell) {
+            return;
+        }
+        if (cell.empty) {
+            hasEmpty = true;
+            return;
+        }
+        values.add(cell.raw);
+    });
+
+    const sortedValues = Array.from(values).sort((left, right) => left.localeCompare(right, "ru", { sensitivity: "base", numeric: true }));
+    const options = [{ value: CHOICE_FILTER_ALL, label: "Все", checked: !selectedValues.size }];
+
+    sortedValues.forEach((value) => {
+        options.push({ value, label: value, checked: selectedValues.has(value) });
+    });
+
+    if (hasEmpty) {
+        options.push({ value: CHOICE_FILTER_EMPTY, label: "Пусто", checked: selectedValues.has(CHOICE_FILTER_EMPTY) });
+    }
+
+    return options;
+}
+
+function getSelectedChoiceValues(filter) {
+    if (!filter) {
+        return [];
+    }
+    if (Array.isArray(filter.selectedValues)) {
+        return Array.from(new Set(filter.selectedValues.filter((value) => typeof value === "string" && value && value !== CHOICE_FILTER_ALL)));
+    }
+    if (typeof filter.value === "string" && filter.value && filter.value !== CHOICE_FILTER_ALL) {
+        return [filter.value];
+    }
+    return [];
+}
+
+function getChoiceFilterSourceRows(columnName) {
+    const orderedColumns = state.table.derived.orderedColumns;
+    const filteredRows = state.table.derived.rows.filter((row) =>
+        orderedColumns.every((column) => {
+            if (column.name === columnName) {
+                return true;
+            }
+            return matchesFilter(row.cells[column.name], state.table.filters[column.name], column);
+        })
+    );
+
+    let sortedRows = [...filteredRows];
+    if (state.table.sort.columnName && state.table.sort.direction) {
+        const sortColumn = orderedColumns.find((column) => column.name === state.table.sort.columnName);
+        if (sortColumn) {
+            sortedRows.sort((left, right) => compareRows(left, right, sortColumn));
+            if (state.table.sort.direction === "desc") {
+                sortedRows.reverse();
+            }
+        }
+    }
+
+    const rowLimit = Math.max(1, Number(state.table.settings.rowLimit) || 1);
+    return elements.displayAllToggle.checked ? sortedRows : sortedRows.slice(0, rowLimit);
 }
 
 function renderTypesPanel() {
@@ -1638,7 +1828,7 @@ function renderTypesPanel() {
                             <select data-action="change-type" data-column="${escapeHtml(column.name)}">
                                 ${columnTypes
                                     .map(
-                                        (type) => `<option value="${type}" ${type === column.type ? "selected" : ""}>${type}</option>`
+                                        (type) => `<option value="${type}" ${type === column.type ? "selected" : ""}>${escapeHtml(getColumnTypeLabel(type))}</option>`
                                     )
                                     .join("")}
                             </select>
@@ -1736,7 +1926,7 @@ function renderErrorsPanel() {
     );
     const errorMarkup = errors.map(
         (error) => {
-            const message = `Строка ${error.row_number}, столбец ${error.column_name}: ${error.reason}. Значение: ${error.value || ""}`;
+            const message = formatDatasetErrorMessage(error);
             return `<div class="issue-item error" title="${escapeHtml(message)}">${escapeHtml(message)}</div>`;
         }
     );
@@ -2274,6 +2464,25 @@ async function handleDetailsChange(event) {
         return;
     }
 
+    if (target.dataset.action === "filter-choice") {
+        const column = getColumnState(target.dataset.column);
+        const filter = ensureFilter(target.dataset.column, column?.type || "choice");
+        const optionValue = target.dataset.value || CHOICE_FILTER_ALL;
+        if (optionValue === CHOICE_FILTER_ALL) {
+            filter.selectedValues = [];
+        } else {
+            const selectedValues = new Set(getSelectedChoiceValues(filter));
+            if (target.checked) {
+                selectedValues.add(optionValue);
+            } else {
+                selectedValues.delete(optionValue);
+            }
+            filter.selectedValues = Array.from(selectedValues);
+        }
+        refreshDataViews();
+        return;
+    }
+
     if (target.dataset.action === "filter-date") {
         const column = getColumnState(target.dataset.column);
         const filter = ensureFilter(target.dataset.column, column?.type || "date");
@@ -2401,8 +2610,9 @@ function bindEvents() {
 
 async function init() {
     bindEvents();
-    await reloadBootstrap();
+    setupAnalysisSplitter();
     switchRightTab(state.activeRightTab);
+    await reloadBootstrap();
 }
 
 init().catch(() => {

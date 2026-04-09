@@ -25,12 +25,8 @@
 
         <main class="workspace">
             <header class="workspace-header">
-                <div>
-                    <h2 id="active-tab-title">Обзор</h2>
-                </div>
-                <div class="workspace-actions">
-                    <span class="status-pill" id="save-status">Готово к работе</span>
-                </div>
+                <h2 id="active-tab-title" class="workspace-title"></h2>
+                <div id="save-status" class="workspace-save-status" hidden>Готово к работе</div>
             </header>
 
             <section class="tab-panel active" data-panel="overview">
@@ -177,9 +173,61 @@
             </section>
 
             <section class="tab-panel" data-panel="analysis">
-                <article class="card placeholder-card">
-                    <h3>Анализ</h3>
-                    <p>Вкладка анализа сохранена в составе интерфейса и пока реализована как заглушка в рамках MVP.</p>
+                <article class="analysis-shell" id="analysis-shell">
+                    <div class="analysis-toolbar" id="analysis-toolbar">
+                        <button type="button" id="btn_upload_file" class="primary-button">Загрузить файл</button>
+                        <button type="button" id="btn_use_facts" class="secondary-button">Использовать загрузку фактов</button>
+                        <select id="select_analysis_type" class="analysis-type-select" aria-label="Тип анализа"></select>
+                        <button type="button" id="btn_create_analysis_type" class="secondary-button">Создать</button>
+                        <button type="button" id="btn_delete_analysis_type" class="secondary-button">Удалить</button>
+                        <button type="button" id="btn_save_analysis_type" class="secondary-button">Сохранить тип анализа</button>
+                        <button type="button" id="btn_reset_settings" class="secondary-button">Сбросить настройки</button>
+                        <button type="button" id="btn_export_analysis_report" class="secondary-button">Экспорт отчета</button>
+                    </div>
+
+                    <input type="file" id="analysis-file-input" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
+
+                    <div id="alert_message" class="service-message info analysis-message">Выберите тип анализа или подключите данные из вкладки «Загрузка фактов».</div>
+                    <div id="analysis-source-meta" class="analysis-source-meta"></div>
+
+                    <div class="analysis-main" id="analysis-main">
+                        <aside class="analysis-left-panel">
+                            <div class="panel-header">
+                                <span class="panel-icon">📊</span>
+                                <span>Графики</span>
+                            </div>
+                            <div class="analysis-panel-note" id="analysis-left-note">До 4 карточек графиков в одном типе анализа.</div>
+                            <div id="analysis-compatibility-note" class="analysis-panel-note"></div>
+                            <div class="charts-list" id="list_charts"></div>
+                            <button type="button" id="btn_add_chart" class="add-chart-button secondary-button">Добавить график</button>
+                        </aside>
+
+                        <div class="vertical-splitter" title="Перетащите для изменения ширины"></div>
+
+                        <section class="analysis-right-panel">
+                            <div class="panel-header">
+                                <span class="panel-icon">📈</span>
+                                <span>Таблица данных</span>
+                            </div>
+                            <div class="table-controls" id="analysis-table-controls">
+                                <input type="text" id="input_search" class="search-input" placeholder="Поиск по данным анализа...">
+                                <button type="button" id="panel_filters" class="filter-button secondary-button" disabled title="Расширенная фильтрация будет добавлена в следующем спринте">Фильтры</button>
+                                <button type="button" id="panel_sorting" class="sort-button secondary-button">Сбросить сортировку</button>
+                                <span id="label_count" class="table-stats">Строк: 0 | Столбцов: 0</span>
+                            </div>
+                            <div id="loading_indicator" class="analysis-state hidden">Подготовка данных анализа...</div>
+                            <div id="empty_state" class="analysis-state">
+                                <p>Источник данных не выбран. Подключите данные из вкладки «Загрузка фактов» или создайте тип анализа.</p>
+                                <button type="button" id="btn_retry_use_facts" class="secondary-button">Повторить подключение данных</button>
+                            </div>
+                            <div id="analysis-table-wrap" class="analysis-table-wrap hidden">
+                                <table id="data_table" class="analysis-table">
+                                    <thead id="analysis-table-head"></thead>
+                                    <tbody id="analysis-table-body"></tbody>
+                                </table>
+                            </div>
+                        </section>
+                    </div>
                 </article>
             </section>
 
@@ -319,5 +367,6 @@
     </div>
 
     <script src="/app.js"></script>
+    <script src="/analysis.js"></script>
 </body>
 </html>
