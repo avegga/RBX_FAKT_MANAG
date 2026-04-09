@@ -35,6 +35,7 @@
         comment_title: "",
         comment_text: "",
         is_hidden: false,
+        ui_collapsed: false,
         position,
     });
 
@@ -43,6 +44,7 @@
         userState: { ...defaultUserState },
         dataset: emptyDataset(),
         chartPreviews: [],
+        viewMode: "editor",
         loading: false,
         message: {
             text: "Выберите тип анализа или подключите данные из вкладки «Загрузка фактов».",
@@ -57,6 +59,7 @@
             search: "",
             sortColumn: "",
             sortDirection: "asc",
+            columnWidths: {},
         },
     };
 
@@ -64,6 +67,7 @@
     let chartPreviewTimer = null;
     let chartPreviewRequestId = 0;
     let userStateSaveTimer = null;
+    let activeTableResize = null;
 
     const elements = {
         shell: document.getElementById("analysis-shell"),
@@ -73,6 +77,8 @@
         analysisFileInput: document.getElementById("analysis-file-input"),
         useFactsButton: document.getElementById("btn_use_facts"),
         typeSelect: document.getElementById("select_analysis_type"),
+        editorViewButton: document.getElementById("btn_analysis_editor_view"),
+        sheetViewButton: document.getElementById("btn_analysis_sheet_view"),
         createTypeButton: document.getElementById("btn_create_analysis_type"),
         deleteTypeButton: document.getElementById("btn_delete_analysis_type"),
         saveTypeButton: document.getElementById("btn_save_analysis_type"),
@@ -87,7 +93,12 @@
         loadingIndicator: document.getElementById("loading_indicator"),
         emptyState: document.getElementById("empty_state"),
         retryUseFactsButton: document.getElementById("btn_retry_use_facts"),
+        mainView: document.getElementById("analysis-main"),
+        sheetView: document.getElementById("analysis-sheet-view"),
+        sheetGrid: document.getElementById("analysis-sheet-grid"),
         tableWrap: document.getElementById("analysis-table-wrap"),
+        tableElement: document.getElementById("data_table"),
+        tableColgroup: document.getElementById("analysis-table-colgroup"),
         tableHead: document.getElementById("analysis-table-head"),
         tableBody: document.getElementById("analysis-table-body"),
     };
@@ -122,6 +133,30 @@
     function setMessage(text, level = "info") {
         state.message = { text, level };
         renderMessage();
+    }
+
+    function loadAnalysisUiPreferences() {
+        try {
+            const viewMode = localStorage.getItem("analysis-view-mode");
+            state.viewMode = viewMode === "sheet" ? "sheet" : "editor";
+        } catch {
+            state.viewMode = "editor";
+        }
+
+        try {
+            const rawWidths = localStorage.getItem("analysis-table-column-widths");
+            const parsed = rawWidths ? JSON.parse(rawWidths) : {};
+            state.table.columnWidths = parsed && typeof parsed === "object" ? parsed : {};
+        } catch {
+            state.table.columnWidths = {};
+        }
+    }
+
+    function persistAnalysisUiPreferences() {
+        try {
+            localStorage.setItem("analysis-view-mode", state.viewMode);
+            localStorage.setItem("analysis-table-column-widths", JSON.stringify(state.table.columnWidths || {}));
+        } catch {}
     }
 
     function renderMessage() {
@@ -446,6 +481,24 @@
         `;
     }
 
+    function buildSheetCardMarkup(chart, preview, index) {
+        const title = escapeHtml(getChartDisplayTitle(chart, index));
+        const compatibility = getChartCompatibility(chart);
+        return `
+            <article class="analysis-sheet-card ${compatibility.ok ? "" : "is-incompatible"}">
+                <div class="analysis-sheet-card-head">
+                    <div>
+                        <h4>${title}</h4>
+                        <div class="analysis-sheet-card-meta">${escapeHtml(chart.chart_type)} • ${escapeHtml(getSourceKindLabel(chart.source_kind || "none"))}</div>
+                    </div>
+                    <span class="analysis-sheet-card-status ${compatibility.ok ? "" : "warning"}">${compatibility.ok ? "Готов" : "Нужна настройка"}</span>
+                </div>
+                ${buildChartPreviewMarkup(preview, chart)}
+                ${buildChartCommentMarkup(chart)}
+            </article>
+        `;
+    }
+
     function sanitizeExportFileName(value, fallback) {
         const normalized = String(value || "")
             .trim()
@@ -690,7 +743,7 @@
             state.draft.charts = persistedDraft.charts
                 .slice()
                 .sort((left, right) => left.position - right.position)
-                .map((chart, index) => ({ ...chart, position: index }));
+                .map((chart, index) => ({ ...chart, ui_collapsed: false, position: index }));
             return;
         }
 
@@ -700,8 +753,27 @@
             ? current.charts
                 .slice()
                 .sort((left, right) => left.position - right.position)
-                .map((chart, index) => ({ ...chart, position: index }))
+                .map((chart, index) => ({ ...chart, ui_collapsed: false, position: index }))
             : [];
+    }
+
+    function toPersistedChart(chart, index) {
+        return {
+            id: chart.id,
+            chart_type: chart.chart_type,
+            source_kind: chart.source_kind,
+            x_field: chart.x_field,
+            y_field: chart.y_field,
+            group_field: chart.group_field,
+            agg_func: chart.agg_func,
+            color: chart.color,
+            legend: chart.legend,
+            labels: chart.labels,
+            comment_title: chart.comment_title,
+            comment_text: chart.comment_text,
+            is_hidden: chart.is_hidden,
+            position: index,
+        };
     }
 
     function buildDraftStatePayload() {
@@ -711,7 +783,7 @@
         return {
             analysis_type_id: state.draft.selectedTypeId,
             name: state.draft.name,
-            charts: state.draft.charts.map((chart, index) => ({ ...chart, position: index })),
+            charts: state.draft.charts.map((chart, index) => toPersistedChart(chart, index)),
         };
     }
 
@@ -743,6 +815,75 @@
         return options.join("");
     }
 
+    function renderViewMode() {
+        const isSheet = state.viewMode === "sheet";
+        elements.mainView?.classList.toggle("hidden", isSheet);
+        elements.sheetView?.classList.toggle("hidden", !isSheet);
+        elements.editorViewButton?.classList.toggle("active", !isSheet);
+        elements.sheetViewButton?.classList.toggle("active", isSheet);
+    }
+
+    function renderSheetView() {
+        if (!elements.sheetGrid) {
+            return;
+        }
+
+        const cards = state.draft.charts.slice(0, 4);
+        if (!cards.length) {
+            elements.sheetGrid.innerHTML = '<div class="analysis-sheet-empty">Добавьте до четырех графиков, чтобы увидеть общий лист 2x2.</div>';
+            return;
+        }
+
+        const markup = [];
+        cards.forEach((chart, index) => {
+            const preview = state.chartPreviews[index] || { state: "idle", message: "Подготовьте конфигурацию графика." };
+            if (chart.is_hidden) {
+                markup.push(`
+                    <article class="analysis-sheet-card is-hidden-card">
+                        <div class="analysis-sheet-card-head">
+                            <div>
+                                <h4>${escapeHtml(getChartDisplayTitle(chart, index))}</h4>
+                                <div class="analysis-sheet-card-meta">График скрыт пользователем</div>
+                            </div>
+                        </div>
+                        <div class="analysis-sheet-placeholder">Этот график скрыт и не показывается на листе.</div>
+                    </article>
+                `);
+                return;
+            }
+            markup.push(buildSheetCardMarkup(chart, preview, index));
+        });
+
+        while (markup.length < 4) {
+            markup.push('<div class="analysis-sheet-placeholder">Свободное место для графика</div>');
+        }
+
+        elements.sheetGrid.innerHTML = markup.join("");
+    }
+
+    function getAnalysisColumnWidth(columnName) {
+        const fallback = columnName === "__row_index__" ? 72 : 190;
+        return Math.max(72, Number(state.table.columnWidths[columnName]) || fallback);
+    }
+
+    function renderTableColgroup(columns) {
+        if (!elements.tableColgroup) {
+            return;
+        }
+
+        const widths = [
+            `<col style="width:${getAnalysisColumnWidth("__row_index__")}px">`,
+            ...columns.map((column) => `<col style="width:${getAnalysisColumnWidth(column.name)}px">`),
+        ];
+        elements.tableColgroup.innerHTML = widths.join("");
+
+        const totalWidth = getAnalysisColumnWidth("__row_index__") + columns.reduce((sum, column) => sum + getAnalysisColumnWidth(column.name), 0);
+        if (elements.tableElement) {
+            elements.tableElement.style.width = `${totalWidth}px`;
+            elements.tableElement.style.minWidth = `${totalWidth}px`;
+        }
+    }
+
     function renderCharts() {
         if (!state.draft.charts.length) {
             elements.chartsList.innerHTML = '<div class="analysis-empty-list">В этом типе анализа пока нет графиков.</div>';
@@ -764,6 +905,7 @@
                 const compatibility = getChartCompatibility(chart);
                 const preview = state.chartPreviews[index] || null;
                 const hasComment = Boolean(String(chart.comment_title || "").trim() || String(chart.comment_text || "").trim());
+                const paramsCollapsed = Boolean(chart.ui_collapsed);
                 return `
                     <article class="chart-card ${chart.is_hidden ? "is-hidden" : ""} ${compatibility.ok ? "" : "is-incompatible"}" id="chart_card_${chartNumber}" data-chart-index="${index}">
                         <div class="chart-card-head">
@@ -776,14 +918,16 @@
                                 <button type="button" class="secondary-button small-button" data-analysis-action="save-chart" data-chart-index="${index}">HTML</button>
                                 <button type="button" class="secondary-button small-button" data-analysis-action="print-chart" data-chart-index="${index}">Печать</button>
                                 <button type="button" class="secondary-button small-button" data-analysis-action="export-table" data-chart-index="${index}">XLSX</button>
+                                <button type="button" class="secondary-button small-button" data-analysis-action="toggle-params" data-chart-index="${index}">${paramsCollapsed ? "Показать параметры" : "Свернуть параметры"}</button>
                                 <button type="button" class="secondary-button small-button" data-analysis-action="move-up" data-chart-index="${index}" ${index === 0 ? "disabled" : ""}>↑</button>
                                 <button type="button" class="secondary-button small-button" data-analysis-action="move-down" data-chart-index="${index}" ${index === state.draft.charts.length - 1 ? "disabled" : ""}>↓</button>
-                                <button type="button" class="secondary-button small-button" id="btn_hide_chart_${chartNumber}" data-analysis-action="toggle-hidden" data-chart-index="${index}">${chart.is_hidden ? "Показать" : "Скрыть"}</button>
+                                <button type="button" class="secondary-button small-button" id="btn_hide_chart_${chartNumber}" data-analysis-action="toggle-hidden" data-chart-index="${index}">${chart.is_hidden ? "Показать график" : "Скрыть график"}</button>
                                 <button type="button" class="danger-button small-button" id="btn_delete_chart_${chartNumber}" data-analysis-action="delete-chart" data-chart-index="${index}">Удалить</button>
                             </div>
                         </div>
                         <div class="chart-card-summary">${compatibility.ok ? `Источник: ${escapeHtml(getSourceKindLabel(chart.source_kind || "none"))}.` : escapeHtml(compatibility.issues.join("; "))}</div>
-                        <div class="chart-card-grid">
+                        <div class="chart-card-summary chart-card-params-state">${paramsCollapsed ? "Параметры графика свернуты." : "Параметры графика развернуты."}</div>
+                        <div class="chart-card-grid ${paramsCollapsed ? "is-collapsed" : ""}">
                             <label>
                                 <span>Тип графика</span>
                                 <select id="select_chart_type_${chartNumber}" data-analysis-field="chart_type" data-chart-index="${index}">
@@ -925,6 +1069,8 @@
         elements.tableWrap.classList.remove("hidden");
         elements.countLabel.textContent = `Строк: ${rows.length}${rows.length > visibleRows.length ? ` (показано ${visibleRows.length})` : ""} | Столбцов: ${columns.length}`;
 
+        renderTableColgroup(columns);
+
         elements.tableHead.innerHTML = `
             <tr>
                 <th>#</th>
@@ -932,9 +1078,12 @@
                     .map(
                         (column) => `
                             <th>
-                                <button type="button" data-analysis-action="sort-column" data-column="${escapeHtml(column.name)}">
-                                    ${escapeHtml(column.name)}${state.table.sortColumn === column.name ? ` ${state.table.sortDirection === "asc" ? "▲" : "▼"}` : ""}
-                                </button>
+                                <div class="analysis-th-shell">
+                                    <button type="button" data-analysis-action="sort-column" data-column="${escapeHtml(column.name)}">
+                                        ${escapeHtml(column.name)}${state.table.sortColumn === column.name ? ` ${state.table.sortDirection === "asc" ? "▲" : "▼"}` : ""}
+                                    </button>
+                                    <span class="analysis-col-resizer" data-analysis-action="resize-column" data-column="${escapeHtml(column.name)}"></span>
+                                </div>
                             </th>
                         `
                     )
@@ -952,6 +1101,43 @@
                 `
             )
             .join("");
+    }
+
+    function startTableColumnResize(columnName, event) {
+        if (event.button !== 0) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+        activeTableResize = {
+            columnName,
+            startX: event.clientX,
+            startWidth: getAnalysisColumnWidth(columnName),
+        };
+        window.addEventListener("mousemove", handleTableColumnResize);
+        window.addEventListener("mouseup", stopTableColumnResize);
+    }
+
+    function handleTableColumnResize(event) {
+        if (!activeTableResize) {
+            return;
+        }
+
+        const nextWidth = Math.max(120, activeTableResize.startWidth + (event.clientX - activeTableResize.startX));
+        state.table.columnWidths[activeTableResize.columnName] = nextWidth;
+        renderTableColgroup(state.dataset.columns || []);
+    }
+
+    function stopTableColumnResize() {
+        if (!activeTableResize) {
+            return;
+        }
+
+        activeTableResize = null;
+        persistAnalysisUiPreferences();
+        window.removeEventListener("mousemove", handleTableColumnResize);
+        window.removeEventListener("mouseup", stopTableColumnResize);
     }
 
     function scheduleChartPreviewRefresh() {
@@ -1008,11 +1194,13 @@
     }
 
     function renderAll(options = {}) {
+        renderViewMode();
         renderMessage();
         renderSourceMeta();
         renderTypeSelect();
         renderCharts();
         renderTable();
+        renderSheetView();
         if (options.refreshPreviews !== false) {
             scheduleChartPreviewRefresh();
         }
@@ -1168,7 +1356,7 @@
                 method: "PUT",
                 body: JSON.stringify({
                     name: state.draft.name,
-                    charts: state.draft.charts.map((chart, index) => ({ ...chart, position: index })),
+                    charts: state.draft.charts.map((chart, index) => toPersistedChart(chart, index)),
                 }),
             });
             state.userState.draft_state = buildDraftStatePayload();
@@ -1267,6 +1455,17 @@
         elements.resetButton.addEventListener("click", resetDraftSettings);
         elements.exportReportButton?.addEventListener("click", exportVisibleChartsReport);
         elements.addChartButton.addEventListener("click", addChart);
+        elements.editorViewButton?.addEventListener("click", () => {
+            state.viewMode = "editor";
+            persistAnalysisUiPreferences();
+            renderViewMode();
+        });
+        elements.sheetViewButton?.addEventListener("click", () => {
+            state.viewMode = "sheet";
+            persistAnalysisUiPreferences();
+            renderViewMode();
+            renderSheetView();
+        });
         elements.typeSelect.addEventListener("change", async (event) => {
             const nextId = event.target.value ? Number(event.target.value) : null;
             state.userState.selected_analysis_type_id = nextId;
@@ -1288,6 +1487,9 @@
             setMessage("Сортировка таблицы анализа сброшена.", "info");
         });
         elements.tableHead.addEventListener("click", (event) => {
+            if (event.target.closest("[data-analysis-action='resize-column']")) {
+                return;
+            }
             const actionNode = event.target.closest("[data-analysis-action='sort-column']");
             if (!actionNode) {
                 return;
@@ -1301,6 +1503,13 @@
             }
             scheduleUserStateSave({ table_sort_column: state.table.sortColumn, table_sort_direction: state.table.sortDirection });
             renderTable();
+        });
+        elements.tableHead.addEventListener("mousedown", (event) => {
+            const resizer = event.target.closest("[data-analysis-action='resize-column']");
+            if (!resizer) {
+                return;
+            }
+            startTableColumnResize(resizer.dataset.column, event);
         });
         elements.chartsList.addEventListener("click", (event) => {
             const actionNode = event.target.closest("[data-analysis-action]");
@@ -1333,6 +1542,15 @@
             }
             if (action === "export-table") {
                 void exportChartTable(index);
+                return;
+            }
+            if (action === "toggle-params") {
+                const chart = state.draft.charts[index];
+                if (!chart) {
+                    return;
+                }
+                chart.ui_collapsed = !chart.ui_collapsed;
+                renderCharts();
                 return;
             }
             if (action === "toggle-hidden") {
@@ -1381,6 +1599,7 @@
         });
     }
 
+    loadAnalysisUiPreferences();
     bindEvents();
     void loadBootstrap();
 })();

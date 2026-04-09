@@ -226,6 +226,16 @@ body.is-resizing-row {
     border-radius: 14px;
     cursor: pointer;
     transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+
+#export-button {
+    background: rgba(195, 120, 72, 0.18);
+    color: #7a3e16;
+    box-shadow: inset 0 0 0 1px rgba(122, 62, 22, 0.18);
+}
+
+#export-button:hover {
+    background: rgba(195, 120, 72, 0.28);
+}
 }
 
 .tab-button {
@@ -1372,6 +1382,25 @@ input[type="range"] {
     background: #fff;
     font-size: 14px;
 }
+
+.analysis-view-switch {
+    display: inline-flex;
+    gap: 6px;
+    padding: 2px;
+    border-radius: 12px;
+    background: rgba(255, 250, 242, 0.86);
+    box-shadow: inset 0 0 0 1px rgba(74, 56, 38, 0.12);
+}
+
+.analysis-view-switch .secondary-button {
+    padding: 8px 12px;
+}
+
+.analysis-view-switch .secondary-button.active {
+    background: rgba(15, 118, 110, 0.18);
+    color: #0f5d57;
+    box-shadow: inset 0 0 0 1px rgba(15, 118, 110, 0.2);
+}
 .analysis-main {
     display: flex;
     flex: 1 1 auto;
@@ -1540,7 +1569,9 @@ input[type="range"] {
 }
 
 .analysis-state.hidden,
-.analysis-table-wrap.hidden {
+.analysis-table-wrap.hidden,
+.analysis-sheet-view.hidden,
+.analysis-main.hidden {
     display: none;
 }
 
@@ -1577,6 +1608,14 @@ input[type="range"] {
     top: 0;
     background: #f8f2e8;
     z-index: 1;
+    padding: 0;
+}
+
+.analysis-th-shell {
+    position: relative;
+    display: flex;
+    align-items: stretch;
+    min-height: 41px;
 }
 
 .analysis-table th button {
@@ -1585,9 +1624,24 @@ input[type="range"] {
     cursor: pointer;
     width: 100%;
     text-align: left;
-    padding: 0;
+    padding: 10px 18px 10px 12px;
     font-weight: 600;
     color: inherit;
+}
+
+.analysis-col-resizer {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 8px;
+    height: 100%;
+    cursor: col-resize;
+    background: transparent;
+    z-index: 2;
+}
+
+.analysis-col-resizer:hover {
+    background: rgba(15, 118, 110, 0.18);
 }
 
 .analysis-table tr:hover td {
@@ -1652,10 +1706,19 @@ input[type="range"] {
     font-size: 12px;
 }
 
+.chart-card-params-state {
+    margin-top: -2px;
+    font-style: italic;
+}
+
 .chart-card-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
+}
+
+.chart-card-grid.is-collapsed {
+    display: none;
 }
 
 .chart-card-grid label {
@@ -1866,6 +1929,101 @@ input[type="range"] {
     background: rgba(255,255,255,0.6);
 }
 
+.analysis-sheet-view {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 520px;
+}
+
+.analysis-sheet-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.analysis-sheet-head h3 {
+    margin: 0 0 4px;
+}
+
+.analysis-sheet-head p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 13px;
+}
+
+.analysis-sheet-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.analysis-sheet-card,
+.analysis-sheet-placeholder,
+.analysis-sheet-empty {
+    min-height: 320px;
+    border-radius: 12px;
+    border: 1px solid rgba(74, 56, 38, 0.14);
+    background: rgba(255, 250, 242, 0.92);
+    padding: 12px;
+}
+
+.analysis-sheet-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.analysis-sheet-card.is-incompatible {
+    border-color: rgba(217, 119, 6, 0.35);
+}
+
+.analysis-sheet-card-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.analysis-sheet-card-head h4 {
+    margin: 0 0 4px;
+    font-size: 15px;
+}
+
+.analysis-sheet-card-meta {
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.analysis-sheet-card-status {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    background: rgba(15, 118, 110, 0.12);
+    color: #0f766e;
+}
+
+.analysis-sheet-card-status.warning {
+    background: rgba(217, 119, 6, 0.12);
+    color: #b45309;
+}
+
+.analysis-sheet-placeholder,
+.analysis-sheet-empty,
+.analysis-sheet-card.is-hidden-card {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+    text-align: center;
+    background: #f8f2e8;
+    border-style: dashed;
+}
+
 @media (max-width: 1100px) {
     .analysis-toolbar {
         flex-wrap: wrap !important;
@@ -1884,6 +2042,10 @@ input[type="range"] {
     }
 
     .analysis-pie-wrap {
+        grid-template-columns: 1fr;
+    }
+
+    .analysis-sheet-grid {
         grid-template-columns: 1fr;
     }
 }

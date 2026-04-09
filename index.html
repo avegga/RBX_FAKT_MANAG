@@ -180,6 +180,10 @@
                         <button type="button" id="btn_upload_file" class="primary-button">Загрузить файл</button>
                         <button type="button" id="btn_use_facts" class="secondary-button">Использовать загрузку фактов</button>
                         <select id="select_analysis_type" class="analysis-type-select" aria-label="Тип анализа"></select>
+                        <div class="analysis-view-switch" role="tablist" aria-label="Режим просмотра анализа">
+                            <button type="button" id="btn_analysis_editor_view" class="secondary-button active" data-analysis-view="editor">Редактор</button>
+                            <button type="button" id="btn_analysis_sheet_view" class="secondary-button" data-analysis-view="sheet">Лист 2x2</button>
+                        </div>
                         <button type="button" id="btn_create_analysis_type" class="secondary-button">Создать</button>
                         <button type="button" id="btn_delete_analysis_type" class="secondary-button">Удалить</button>
                         <button type="button" id="btn_save_analysis_type" class="secondary-button">Сохранить тип анализа</button>
@@ -224,12 +228,23 @@
                             </div>
                             <div id="analysis-table-wrap" class="analysis-table-wrap hidden">
                                 <table id="data_table" class="analysis-table">
+                                    <colgroup id="analysis-table-colgroup"></colgroup>
                                     <thead id="analysis-table-head"></thead>
                                     <tbody id="analysis-table-body"></tbody>
                                 </table>
                             </div>
                         </section>
                     </div>
+
+                    <section id="analysis-sheet-view" class="analysis-sheet-view hidden">
+                        <div class="analysis-sheet-head">
+                            <div>
+                                <h3>Лист 2x2</h3>
+                                <p>Отдельный экран для одновременного просмотра до четырех графиков.</p>
+                            </div>
+                        </div>
+                        <div id="analysis-sheet-grid" class="analysis-sheet-grid"></div>
+                    </section>
                 </article>
             </section>
 
