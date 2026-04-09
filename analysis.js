@@ -31,9 +31,11 @@
         agg_func: "count",
         color: "#b7791f",
         legend: "",
+        legend_position: "right",
         labels: "",
         comment_title: "",
         comment_text: "",
+        annotations: [],
         is_hidden: false,
         ui_collapsed: false,
         position,
@@ -68,6 +70,7 @@
     let chartPreviewRequestId = 0;
     let userStateSaveTimer = null;
     let activeTableResize = null;
+    let activeAnnotationDrag = null;
 
     const elements = {
         shell: document.getElementById("analysis-shell"),
@@ -128,6 +131,14 @@
             .replaceAll("<", "&lt;")
             .replaceAll(">", "&gt;")
             .replaceAll('"', "&quot;");
+    }
+
+    function clamp(value, min, max) {
+        return Math.min(max, Math.max(min, value));
+    }
+
+    function createAnnotationId() {
+        return `annotation-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     }
 
     function setMessage(text, level = "info") {
@@ -251,20 +262,10 @@
         if (!series?.length) {
             return "";
         }
-        return `
-            <div class="analysis-chart-legend">
-                ${series
-                    .map(
-                        (item) => `
-                            <span class="analysis-chart-legend-item">
-                                <span class="analysis-chart-legend-swatch" style="background:${escapeHtml(item.color || "#b7791f")}"></span>
-                                <span>${escapeHtml(item.name || "Серия")}</span>
-                            </span>
-                        `
-                    )
-                    .join("")}
-            </div>
-        `;
+        return series.map((item) => ({
+            color: item.color || "#b7791f",
+            label: item.name || "Серия",
+        }));
     }
 
     function buildBarChartSvg(preview) {
@@ -388,26 +389,45 @@
             })
             .join("");
 
-        const pieLegend = categories
-            .map((category, index) => {
-                const color = pickPreviewColor(index, baseColor || "#b7791f");
-                return `
-                    <span class="analysis-chart-legend-item">
-                        <span class="analysis-chart-legend-swatch" style="background:${escapeHtml(color)}"></span>
-                        <span>${escapeHtml(category)}: ${escapeHtml(formatPreviewNumber(values[index] || 0))}</span>
-                    </span>
-                `;
-            })
-            .join("");
+        return `
+            <svg viewBox="0 0 ${width} ${height}" class="analysis-chart-svg" aria-label="Круговая диаграмма">
+                ${slices}
+                <circle cx="${cx}" cy="${cy}" r="24" fill="#fffaf2"></circle>
+                <text x="${cx}" y="${cy + 4}" text-anchor="middle">${escapeHtml(formatPreviewNumber(total))}</text>
+            </svg>
+        `;
+    }
+
+    function getLegendItems(preview, chart) {
+        if (chart.chart_type === "pie") {
+            const categories = preview.categories || [];
+            const values = preview.series?.[0]?.values || [];
+            return categories.map((category, index) => ({
+                color: pickPreviewColor(index, chart.color || "#b7791f"),
+                label: `${category}: ${formatPreviewNumber(values[index] || 0)}`,
+            }));
+        }
+
+        return buildSeriesLegendMarkup(preview.series || []);
+    }
+
+    function buildLegendMarkup(items, position) {
+        if (!items?.length || position === "hidden") {
+            return "";
+        }
 
         return `
-            <div class="analysis-pie-wrap">
-                <svg viewBox="0 0 ${width} ${height}" class="analysis-chart-svg" aria-label="Круговая диаграмма">
-                    ${slices}
-                    <circle cx="${cx}" cy="${cy}" r="24" fill="#fffaf2"></circle>
-                    <text x="${cx}" y="${cy + 4}" text-anchor="middle">${escapeHtml(formatPreviewNumber(total))}</text>
-                </svg>
-                <div class="analysis-chart-legend analysis-chart-legend-pie">${pieLegend}</div>
+            <div class="analysis-chart-legend analysis-chart-legend-${escapeHtml(position)}">
+                ${items
+                    .map(
+                        (item) => `
+                            <span class="analysis-chart-legend-item">
+                                <span class="analysis-chart-legend-swatch" style="background:${escapeHtml(item.color || "#b7791f")}"></span>
+                                <span>${escapeHtml(item.label || item.name || "Серия")}</span>
+                            </span>
+                        `
+                    )
+                    .join("")}
             </div>
         `;
     }
@@ -466,6 +486,27 @@
         } else {
             visualizationMarkup = buildAggregationTableMarkup(current);
         }
+        const legendPosition = chart.legend_position || "right";
+        const legendItems = getLegendItems(current, chart);
+        const legendMarkup = buildLegendMarkup(legendItems, legendPosition);
+        const isInsideLegend = legendPosition === "inside-top-right" || legendPosition === "inside-top-left";
+        const isRightLegend = legendPosition === "right";
+        const isBottomLegend = legendPosition === "bottom";
+
+        const annotationsMarkup = (chart.annotations || [])
+            .map(
+                (annotation) => `
+                    <button
+                        type="button"
+                        class="analysis-chart-annotation"
+                        data-analysis-action="drag-annotation"
+                        data-chart-index="${escapeHtml(String(chart.position ?? 0))}"
+                        data-annotation-id="${escapeHtml(annotation.id)}"
+                        style="left:${Number(annotation.x) || 0}%;top:${Number(annotation.y) || 0}%"
+                    >${escapeHtml(annotation.text)}</button>
+                `
+            )
+            .join("");
 
         return `
             <div class="analysis-chart-preview is-ready">
@@ -473,8 +514,15 @@
                     <strong>${escapeHtml(chart.legend || "Предпросмотр графика")}</strong>
                     <span>${escapeHtml((summary.aggregation || chart.agg_func || "count").toUpperCase())}</span>
                 </div>
-                <div class="analysis-chart-preview-body">${visualizationMarkup}</div>
-                ${chart.chart_type !== "pie" ? buildSeriesLegendMarkup(current.series || []) : ""}
+                <div class="analysis-chart-preview-body ${isRightLegend ? "has-side-legend" : ""}">
+                    <div class="analysis-chart-canvas" data-chart-index="${escapeHtml(String(chart.position ?? 0))}">
+                        <div class="analysis-chart-visual">${visualizationMarkup}</div>
+                        ${isInsideLegend ? legendMarkup : ""}
+                        <div class="analysis-chart-annotations-layer">${annotationsMarkup}</div>
+                    </div>
+                    ${isRightLegend ? legendMarkup : ""}
+                </div>
+                ${isBottomLegend ? legendMarkup : ""}
                 <div class="analysis-chart-preview-meta">Точек: ${escapeHtml(String(summary.points || 0))}${summary.skipped_rows ? ` • Пропущено строк: ${escapeHtml(String(summary.skipped_rows))}` : ""}</div>
                 ${warningMarkup}
             </div>
@@ -547,13 +595,19 @@
             .analysis-chart-preview-head, .analysis-chart-preview-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; }
             .analysis-chart-preview-head strong { font-size: 13px; }
             .analysis-chart-preview-head span, .analysis-chart-preview-meta, .report-meta { color: #6f6458; }
+            .analysis-chart-preview-body.has-side-legend { display: grid; grid-template-columns: minmax(0, 1fr) minmax(150px, 180px); gap: 10px; align-items: start; }
+            .analysis-chart-canvas { position: relative; min-height: 180px; }
             .analysis-chart-svg { width: 100%; height: auto; display: block; }
             .analysis-chart-svg text { fill: #6f6458; font-size: 10px; font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif; }
             .analysis-chart-legend { display: flex; flex-wrap: wrap; gap: 8px 12px; margin-top: 8px; }
+            .analysis-chart-legend-right, .analysis-chart-legend-bottom, .analysis-chart-legend-inside-top-right, .analysis-chart-legend-inside-top-left { padding: 8px 10px; border-radius: 10px; background: rgba(255, 250, 242, 0.94); border: 1px solid rgba(74, 56, 38, 0.12); }
+            .analysis-chart-legend-right { flex-direction: column; align-items: flex-start; margin-top: 0; }
+            .analysis-chart-legend-bottom { margin-top: 10px; }
+            .analysis-chart-legend-inside-top-right, .analysis-chart-legend-inside-top-left { position: absolute; top: 8px; max-width: 44%; z-index: 2; }
+            .analysis-chart-legend-inside-top-right { right: 8px; }
+            .analysis-chart-legend-inside-top-left { left: 8px; }
             .analysis-chart-legend-item { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #6f6458; }
             .analysis-chart-legend-swatch { width: 10px; height: 10px; border-radius: 999px; flex: 0 0 auto; }
-            .analysis-pie-wrap { display: grid; grid-template-columns: minmax(0, 1fr) minmax(160px, 180px); gap: 10px; align-items: center; }
-            .analysis-chart-legend-pie { flex-direction: column; align-items: flex-start; }
             .analysis-preview-table-wrap { overflow: auto; border: 1px solid rgba(74, 56, 38, 0.12); border-radius: 8px; background: #fff; }
             .analysis-preview-table { width: 100%; border-collapse: collapse; font-size: 12px; }
             .analysis-preview-table th, .analysis-preview-table td { padding: 7px 8px; border-bottom: 1px solid rgba(74, 56, 38, 0.1); text-align: left; }
@@ -768,12 +822,132 @@
             agg_func: chart.agg_func,
             color: chart.color,
             legend: chart.legend,
+            legend_position: chart.legend_position,
             labels: chart.labels,
             comment_title: chart.comment_title,
             comment_text: chart.comment_text,
+            annotations: (chart.annotations || []).map((annotation) => ({
+                id: annotation.id,
+                text: annotation.text,
+                x: Number(annotation.x) || 0,
+                y: Number(annotation.y) || 0,
+            })),
             is_hidden: chart.is_hidden,
             position: index,
         };
+    }
+
+    function getChartAt(index) {
+        return state.draft.charts[index] || null;
+    }
+
+    function addAnnotation(index) {
+        const chart = getChartAt(index);
+        if (!chart) {
+            return;
+        }
+
+        chart.annotations = [
+            ...(chart.annotations || []),
+            { id: createAnnotationId(), text: `Надпись ${((chart.annotations || []).length || 0) + 1}`, x: 8, y: 8 },
+        ];
+        state.userState.draft_state = buildDraftStatePayload();
+        scheduleUserStateSave({ draft_state: state.userState.draft_state });
+        renderAll({ refreshPreviews: false });
+    }
+
+    function removeAnnotation(index, annotationId) {
+        const chart = getChartAt(index);
+        if (!chart) {
+            return;
+        }
+
+        chart.annotations = (chart.annotations || []).filter((annotation) => annotation.id !== annotationId);
+        state.userState.draft_state = buildDraftStatePayload();
+        scheduleUserStateSave({ draft_state: state.userState.draft_state });
+        renderAll({ refreshPreviews: false });
+    }
+
+    function updateAnnotationText(index, annotationId, text) {
+        const chart = getChartAt(index);
+        const annotation = chart?.annotations?.find((item) => item.id === annotationId);
+        if (!annotation) {
+            return;
+        }
+
+        annotation.text = String(text || "").trimStart().slice(0, 160);
+        state.userState.draft_state = buildDraftStatePayload();
+    }
+
+    function setAnnotationPosition(index, annotationId, x, y) {
+        const chart = getChartAt(index);
+        const annotation = chart?.annotations?.find((item) => item.id === annotationId);
+        if (!annotation) {
+            return;
+        }
+
+        annotation.x = clamp(x, 0, 92);
+        annotation.y = clamp(y, 0, 92);
+        state.userState.draft_state = buildDraftStatePayload();
+    }
+
+    function syncAnnotationNodes(index, annotationId, x, y, text = null) {
+        document.querySelectorAll(`[data-analysis-action='drag-annotation'][data-chart-index='${index}'][data-annotation-id='${annotationId}']`).forEach((node) => {
+            if (x !== null && x !== undefined) {
+                node.style.left = `${x}%`;
+            }
+            if (y !== null && y !== undefined) {
+                node.style.top = `${y}%`;
+            }
+            if (text !== null) {
+                node.textContent = text;
+            }
+        });
+    }
+
+    function startAnnotationDrag(index, annotationId, event) {
+        if (event.button !== 0) {
+            return;
+        }
+
+        const handle = event.target.closest("[data-analysis-action='drag-annotation']");
+        const canvas = handle?.closest(".analysis-chart-canvas");
+        if (!handle || !canvas) {
+            return;
+        }
+
+        event.preventDefault();
+        const rect = canvas.getBoundingClientRect();
+        activeAnnotationDrag = {
+            chartIndex: index,
+            annotationId,
+            rect,
+        };
+        window.addEventListener("mousemove", handleAnnotationDrag);
+        window.addEventListener("mouseup", stopAnnotationDrag);
+    }
+
+    function handleAnnotationDrag(event) {
+        if (!activeAnnotationDrag) {
+            return;
+        }
+
+        const { chartIndex, annotationId, rect } = activeAnnotationDrag;
+        const x = ((event.clientX - rect.left) / Math.max(rect.width, 1)) * 100;
+        const y = ((event.clientY - rect.top) / Math.max(rect.height, 1)) * 100;
+        setAnnotationPosition(chartIndex, annotationId, x, y);
+        syncAnnotationNodes(chartIndex, annotationId, clamp(x, 0, 92), clamp(y, 0, 92));
+    }
+
+    function stopAnnotationDrag() {
+        if (!activeAnnotationDrag) {
+            return;
+        }
+
+        activeAnnotationDrag = null;
+        scheduleUserStateSave({ draft_state: state.userState.draft_state });
+        window.removeEventListener("mousemove", handleAnnotationDrag);
+        window.removeEventListener("mouseup", stopAnnotationDrag);
     }
 
     function buildDraftStatePayload() {
@@ -906,6 +1080,7 @@
                 const preview = state.chartPreviews[index] || null;
                 const hasComment = Boolean(String(chart.comment_title || "").trim() || String(chart.comment_text || "").trim());
                 const paramsCollapsed = Boolean(chart.ui_collapsed);
+                const annotations = chart.annotations || [];
                 return `
                     <article class="chart-card ${chart.is_hidden ? "is-hidden" : ""} ${compatibility.ok ? "" : "is-incompatible"}" id="chart_card_${chartNumber}" data-chart-index="${index}">
                         <div class="chart-card-head">
@@ -918,6 +1093,7 @@
                                 <button type="button" class="secondary-button small-button" data-analysis-action="save-chart" data-chart-index="${index}">HTML</button>
                                 <button type="button" class="secondary-button small-button" data-analysis-action="print-chart" data-chart-index="${index}">Печать</button>
                                 <button type="button" class="secondary-button small-button" data-analysis-action="export-table" data-chart-index="${index}">XLSX</button>
+                                <button type="button" class="secondary-button small-button" data-analysis-action="add-annotation" data-chart-index="${index}">Добавить надпись</button>
                                 <button type="button" class="secondary-button small-button" data-analysis-action="toggle-params" data-chart-index="${index}">${paramsCollapsed ? "Показать параметры" : "Свернуть параметры"}</button>
                                 <button type="button" class="secondary-button small-button" data-analysis-action="move-up" data-chart-index="${index}" ${index === 0 ? "disabled" : ""}>↑</button>
                                 <button type="button" class="secondary-button small-button" data-analysis-action="move-down" data-chart-index="${index}" ${index === state.draft.charts.length - 1 ? "disabled" : ""}>↓</button>
@@ -975,6 +1151,16 @@
                                 <span>Легенда</span>
                                 <input id="input_legend_${chartNumber}" type="text" value="${escapeHtml(chart.legend)}" data-analysis-field="legend" data-chart-index="${index}">
                             </label>
+                            <label>
+                                <span>Положение легенды</span>
+                                <select id="select_legend_position_${chartNumber}" data-analysis-field="legend_position" data-chart-index="${index}">
+                                    <option value="right" ${chart.legend_position === "right" ? "selected" : ""}>справа</option>
+                                    <option value="bottom" ${chart.legend_position === "bottom" ? "selected" : ""}>снизу</option>
+                                    <option value="inside-top-right" ${chart.legend_position === "inside-top-right" ? "selected" : ""}>внутри справа сверху</option>
+                                    <option value="inside-top-left" ${chart.legend_position === "inside-top-left" ? "selected" : ""}>внутри слева сверху</option>
+                                    <option value="hidden" ${chart.legend_position === "hidden" ? "selected" : ""}>скрыта</option>
+                                </select>
+                            </label>
                             <label class="chart-card-wide">
                                 <span>Подписи</span>
                                 <input id="input_labels_${chartNumber}" type="text" value="${escapeHtml(chart.labels)}" data-analysis-field="labels" data-chart-index="${index}">
@@ -987,6 +1173,33 @@
                                 <span>Комментарий</span>
                                 <textarea id="input_comment_text_${chartNumber}" rows="4" data-analysis-field="comment_text" data-chart-index="${index}">${escapeHtml(chart.comment_text || "")}</textarea>
                             </label>
+                            <div class="chart-card-wide annotation-editor">
+                                <div class="annotation-editor-head">
+                                    <span>Надписи на графике</span>
+                                    <strong>${annotations.length}</strong>
+                                </div>
+                                <div class="annotation-editor-list">
+                                    ${annotations.length
+                                        ? annotations
+                                            .map(
+                                                (annotation) => `
+                                                    <div class="annotation-editor-row">
+                                                        <input
+                                                            type="text"
+                                                            value="${escapeHtml(annotation.text)}"
+                                                            data-analysis-annotation-text="true"
+                                                            data-chart-index="${index}"
+                                                            data-annotation-id="${escapeHtml(annotation.id)}"
+                                                            placeholder="Текст надписи"
+                                                        >
+                                                        <button type="button" class="secondary-button small-button" data-analysis-action="remove-annotation" data-chart-index="${index}" data-annotation-id="${escapeHtml(annotation.id)}">Удалить</button>
+                                                    </div>
+                                                `
+                                            )
+                                            .join("")
+                                        : '<div class="annotation-editor-empty">Добавьте надпись, затем перетащите ее мышью по графику.</div>'}
+                                </div>
+                            </div>
                         </div>
                         ${buildChartPreviewMarkup(preview, chart)}
                         ${hasComment ? `<div class="chart-card-comment-preview">${buildChartCommentMarkup(chart)}</div>` : ""}
@@ -1536,12 +1749,20 @@
                 saveChartPreview(index);
                 return;
             }
+            if (action === "add-annotation") {
+                addAnnotation(index);
+                return;
+            }
             if (action === "print-chart") {
                 printChartPreview(index);
                 return;
             }
             if (action === "export-table") {
                 void exportChartTable(index);
+                return;
+            }
+            if (action === "remove-annotation") {
+                removeAnnotation(index, actionNode.dataset.annotationId);
                 return;
             }
             if (action === "toggle-params") {
@@ -1582,6 +1803,12 @@
         });
         elements.chartsList.addEventListener("input", (event) => {
             const target = event.target;
+            if (target.dataset.analysisAnnotationText) {
+                updateAnnotationText(Number(target.dataset.chartIndex), target.dataset.annotationId, target.value);
+                syncAnnotationNodes(Number(target.dataset.chartIndex), target.dataset.annotationId, null, null, target.value);
+                scheduleUserStateSave({ draft_state: state.userState.draft_state });
+                return;
+            }
             const field = target.dataset.analysisField;
             const index = Number(target.dataset.chartIndex);
             if (!field || Number.isNaN(index)) {
@@ -1589,6 +1816,14 @@
             }
             updateChartField(index, field, target.value);
             scheduleUserStateSave({ draft_state: state.userState.draft_state });
+        });
+        elements.shell.addEventListener("mousedown", (event) => {
+            const handle = event.target.closest("[data-analysis-action='drag-annotation']");
+            if (!handle) {
+                return;
+            }
+
+            startAnnotationDrag(Number(handle.dataset.chartIndex), handle.dataset.annotationId, event);
         });
         window.addEventListener("analysis:left-width-changed", (event) => {
             const width = Number(event.detail?.width || 260);

@@ -1752,6 +1752,41 @@ input[type="range"] {
     grid-column: span 2;
 }
 
+.annotation-editor {
+    display: grid;
+    gap: 8px;
+    padding: 10px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.72);
+    border: 1px solid rgba(74, 56, 38, 0.1);
+}
+
+.annotation-editor-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.annotation-editor-list {
+    display: grid;
+    gap: 8px;
+}
+
+.annotation-editor-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+}
+
+.annotation-editor-empty {
+    color: var(--muted);
+    font-size: 12px;
+}
+
 .chart-card-comment-state {
     margin-top: 6px;
     font-size: 11px;
@@ -1843,6 +1878,52 @@ input[type="range"] {
     overflow: hidden;
 }
 
+.analysis-chart-preview-body.has-side-legend {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(150px, 180px);
+    gap: 10px;
+    align-items: start;
+}
+
+.analysis-chart-canvas {
+    position: relative;
+    min-height: 180px;
+}
+
+.analysis-chart-visual {
+    position: relative;
+    z-index: 1;
+}
+
+.analysis-chart-annotations-layer {
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    pointer-events: none;
+}
+
+.analysis-chart-annotation {
+    position: absolute;
+    max-width: 38%;
+    padding: 6px 10px;
+    border: 1px solid rgba(15, 118, 110, 0.18);
+    border-radius: 999px;
+    background: rgba(255, 250, 242, 0.94);
+    color: #2c241b;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: grab;
+    pointer-events: auto;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    box-shadow: 0 2px 6px rgba(61, 43, 25, 0.12);
+}
+
+.analysis-chart-annotation:active {
+    cursor: grabbing;
+}
+
 .analysis-chart-svg {
     width: 100%;
     height: auto;
@@ -1859,6 +1940,44 @@ input[type="range"] {
     display: flex;
     flex-wrap: wrap;
     gap: 8px 12px;
+    margin-top: 8px;
+}
+
+.analysis-chart-legend-right,
+.analysis-chart-legend-bottom,
+.analysis-chart-legend-inside-top-right,
+.analysis-chart-legend-inside-top-left {
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: rgba(255, 250, 242, 0.94);
+    border: 1px solid rgba(74, 56, 38, 0.12);
+}
+
+.analysis-chart-legend-right {
+    flex-direction: column;
+    align-items: flex-start;
+    margin-top: 0;
+}
+
+.analysis-chart-legend-bottom {
+    margin-top: 10px;
+}
+
+.analysis-chart-legend-inside-top-right,
+.analysis-chart-legend-inside-top-left {
+    position: absolute;
+    top: 8px;
+    max-width: 44%;
+    z-index: 2;
+    pointer-events: none;
+}
+
+.analysis-chart-legend-inside-top-right {
+    right: 8px;
+}
+
+.analysis-chart-legend-inside-top-left {
+    left: 8px;
 }
 
 .analysis-chart-legend-item {
@@ -1874,18 +1993,6 @@ input[type="range"] {
     height: 10px;
     border-radius: 999px;
     flex: 0 0 auto;
-}
-
-.analysis-pie-wrap {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(160px, 180px);
-    gap: 10px;
-    align-items: center;
-}
-
-.analysis-chart-legend-pie {
-    flex-direction: column;
-    align-items: flex-start;
 }
 
 .analysis-preview-table-wrap {
@@ -2039,10 +2146,6 @@ input[type="range"] {
 
     .chart-card-grid .chart-card-wide {
         grid-column: span 1;
-    }
-
-    .analysis-pie-wrap {
-        grid-template-columns: 1fr;
     }
 
     .analysis-sheet-grid {

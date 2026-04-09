@@ -26,6 +26,7 @@ COLUMN_TYPE_LABELS = {
 ALLOWED_ANALYSIS_CHART_TYPES = {"bar", "line", "pie", "table"}
 ALLOWED_ANALYSIS_SOURCES = {"none", "facts", "file"}
 ALLOWED_ANALYSIS_AGG_FUNCS = {"count", "sum", "avg", "min", "max"}
+ALLOWED_ANALYSIS_LEGEND_POSITIONS = {"right", "bottom", "inside-top-right", "inside-top-left", "hidden"}
 DEFAULT_STATE = {
     "left_panel_width": 280,
     "right_panel_visible": True,
@@ -153,9 +154,11 @@ class AnalysisChart(db.Model):
     agg_func = db.Column(db.String(40), nullable=False, default="count")
     color = db.Column(db.String(40), nullable=False, default="#b7791f")
     legend = db.Column(db.String(120), nullable=False, default="")
+    legend_position = db.Column(db.String(40), nullable=False, default="right")
     labels = db.Column(db.String(120), nullable=False, default="")
     comment_title = db.Column(db.String(255), nullable=False, default="")
     comment_text = db.Column(db.Text, nullable=False, default="")
+    annotations_json = db.Column(db.Text, nullable=False, default="[]")
     is_hidden = db.Column(db.Boolean, nullable=False, default=False)
     position = db.Column(db.Integer, nullable=False, default=0)
 
@@ -216,6 +219,11 @@ def serialize_template(template):
 
 
 def serialize_analysis_chart(chart):
+    try:
+        annotations = json.loads(chart.annotations_json or "[]")
+    except json.JSONDecodeError:
+        annotations = []
+
     return {
         "id": chart.id,
         "chart_type": chart.chart_type,
@@ -226,9 +234,11 @@ def serialize_analysis_chart(chart):
         "agg_func": chart.agg_func,
         "color": chart.color,
         "legend": chart.legend,
+        "legend_position": chart.legend_position,
         "labels": chart.labels,
         "comment_title": chart.comment_title,
         "comment_text": chart.comment_text,
+        "annotations": annotations if isinstance(annotations, list) else [],
         "is_hidden": chart.is_hidden,
         "position": chart.position,
     }
@@ -571,12 +581,53 @@ def build_default_analysis_chart(position):
         "agg_func": "count",
         "color": "#b7791f",
         "legend": "",
+        "legend_position": "right",
         "labels": "",
         "comment_title": "",
         "comment_text": "",
+        "annotations": [],
         "is_hidden": False,
         "position": position,
     }
+
+
+def normalize_analysis_annotations(raw_annotations):
+    annotations = []
+    if raw_annotations is None:
+        return annotations
+
+    if not isinstance(raw_annotations, list):
+        return annotations
+
+    for index, item in enumerate(raw_annotations[:12]):
+        if not isinstance(item, dict):
+            continue
+
+        annotation_id = str(item.get("id") or f"annotation-{index + 1}").strip()[:80]
+        text = str(item.get("text") or "").strip()[:160]
+        if not text:
+            continue
+
+        try:
+            x = float(item.get("x", 8))
+        except (TypeError, ValueError):
+            x = 8.0
+
+        try:
+            y = float(item.get("y", 8))
+        except (TypeError, ValueError):
+            y = 8.0
+
+        annotations.append(
+            {
+                "id": annotation_id or f"annotation-{index + 1}",
+                "text": text,
+                "x": max(0.0, min(92.0, x)),
+                "y": max(0.0, min(92.0, y)),
+            }
+        )
+
+    return annotations
 
 
 def normalize_analysis_charts(raw_charts):
@@ -600,6 +651,7 @@ def normalize_analysis_charts(raw_charts):
         chart_type = (item.get("chart_type") or "bar").strip().lower()
         source_kind = (item.get("source_kind") or "none").strip().lower()
         agg_func = (item.get("agg_func") or "count").strip().lower() or "count"
+        legend_position = (item.get("legend_position") or "right").strip().lower() or "right"
         if chart_type not in ALLOWED_ANALYSIS_CHART_TYPES:
             errors.append(f"График #{index + 1}: тип '{chart_type}' не поддерживается.")
             continue
@@ -608,6 +660,9 @@ def normalize_analysis_charts(raw_charts):
             continue
         if agg_func not in ALLOWED_ANALYSIS_AGG_FUNCS:
             errors.append(f"График #{index + 1}: агрегация '{agg_func}' не поддерживается.")
+            continue
+        if legend_position not in ALLOWED_ANALYSIS_LEGEND_POSITIONS:
+            errors.append(f"График #{index + 1}: положение легенды '{legend_position}' не поддерживается.")
             continue
 
         charts.append(
@@ -620,9 +675,11 @@ def normalize_analysis_charts(raw_charts):
                 "agg_func": agg_func,
                 "color": (item.get("color") or "#b7791f").strip() or "#b7791f",
                 "legend": (item.get("legend") or "").strip(),
+                "legend_position": legend_position,
                 "labels": (item.get("labels") or "").strip(),
                 "comment_title": (item.get("comment_title") or "").strip()[:255],
                 "comment_text": str(item.get("comment_text") or "").strip(),
+                "annotations": normalize_analysis_annotations(item.get("annotations")),
                 "is_hidden": bool(item.get("is_hidden")),
                 "position": len(charts),
             }
@@ -663,9 +720,11 @@ def replace_analysis_type_charts(analysis_type, charts):
                 agg_func=item["agg_func"],
                 color=item["color"],
                 legend=item["legend"],
+                legend_position=item["legend_position"],
                 labels=item["labels"],
                 comment_title=item["comment_title"],
                 comment_text=item["comment_text"],
+                annotations_json=json.dumps(item["annotations"], ensure_ascii=False),
                 is_hidden=item["is_hidden"],
                 position=item["position"],
             )
@@ -676,6 +735,8 @@ def ensure_analysis_chart_schema():
     required_columns = {
         "comment_title": "ALTER TABLE analysis_charts ADD COLUMN comment_title VARCHAR(255) NOT NULL DEFAULT ''",
         "comment_text": "ALTER TABLE analysis_charts ADD COLUMN comment_text TEXT NOT NULL DEFAULT ''",
+        "annotations_json": "ALTER TABLE analysis_charts ADD COLUMN annotations_json TEXT NOT NULL DEFAULT '[]'",
+        "legend_position": "ALTER TABLE analysis_charts ADD COLUMN legend_position VARCHAR(40) NOT NULL DEFAULT 'right'",
     }
 
     with db.engine.begin() as connection:
