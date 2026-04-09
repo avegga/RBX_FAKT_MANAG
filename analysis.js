@@ -32,6 +32,7 @@
         color: "#b7791f",
         legend: "",
         legend_position: "right",
+        pie_label_mode: "legend",
         labels: "",
         comment_title: "",
         comment_text: "",
@@ -358,21 +359,23 @@
         `;
     }
 
-    function buildPieChartSvg(preview, baseColor) {
+    function buildPieChartSvg(preview, chart) {
         const categories = preview.categories || [];
         const values = preview.series?.[0]?.values || [];
         const total = values.reduce((sum, value) => sum + Number(value || 0), 0);
-        const width = 220;
-        const height = 180;
-        const cx = 92;
-        const cy = 88;
-        const radius = 62;
+        const pieLabelMode = chart.pie_label_mode || "legend";
+        const width = pieLabelMode === "legend" ? 220 : 320;
+        const height = 200;
+        const cx = pieLabelMode === "legend" ? 92 : 110;
+        const cy = 98;
+        const radius = pieLabelMode === "legend" ? 62 : 58;
 
         if (!total) {
             return "";
         }
 
         let angle = -Math.PI / 2;
+        const labelMarks = [];
         const slices = values
             .map((value, index) => {
                 const numericValue = Number(value || 0);
@@ -383,7 +386,27 @@
                 const x2 = cx + Math.cos(nextAngle) * radius;
                 const y2 = cy + Math.sin(nextAngle) * radius;
                 const largeArc = nextAngle - angle > Math.PI ? 1 : 0;
-                const color = pickPreviewColor(index, baseColor || "#b7791f");
+                const color = pickPreviewColor(index, chart.color || "#b7791f");
+                const midAngle = angle + (nextAngle - angle) / 2;
+                if (pieLabelMode !== "legend") {
+                    const textRadius = pieLabelMode === "outside-with-lines" ? radius + 28 : radius + 18;
+                    const labelX = cx + Math.cos(midAngle) * textRadius;
+                    const labelY = cy + Math.sin(midAngle) * textRadius;
+                    const anchor = Math.cos(midAngle) >= 0 ? "start" : "end";
+                    const percent = Math.round(ratio * 1000) / 10;
+                    const text = `${categoryLabel(categories[index])} ${formatPreviewNumber(numericValue)} (${formatPreviewNumber(percent)}%)`;
+
+                    if (pieLabelMode === "outside-with-lines") {
+                        const lineStartX = cx + Math.cos(midAngle) * (radius - 2);
+                        const lineStartY = cy + Math.sin(midAngle) * (radius - 2);
+                        const lineBendX = cx + Math.cos(midAngle) * (radius + 8);
+                        const lineBendY = cy + Math.sin(midAngle) * (radius + 8);
+                        const lineEndX = labelX + (anchor === "start" ? -6 : 6);
+                        labelMarks.push(`<polyline points="${lineStartX},${lineStartY} ${lineBendX},${lineBendY} ${lineEndX},${labelY}" fill="none" stroke="#9b8a75" stroke-width="1"></polyline>`);
+                    }
+
+                    labelMarks.push(`<text x="${labelX}" y="${labelY}" text-anchor="${anchor}" dominant-baseline="middle">${escapeHtml(shortenAxisLabel(text))}</text>`);
+                }
                 angle = nextAngle;
                 return `<path d="M ${cx} ${cy} L ${x1} ${y1} A ${radius} ${radius} 0 ${largeArc} 1 ${x2} ${y2} Z" fill="${escapeHtml(color)}"></path>`;
             })
@@ -394,8 +417,13 @@
                 ${slices}
                 <circle cx="${cx}" cy="${cy}" r="24" fill="#fffaf2"></circle>
                 <text x="${cx}" y="${cy + 4}" text-anchor="middle">${escapeHtml(formatPreviewNumber(total))}</text>
+                ${labelMarks.join("")}
             </svg>
         `;
+    }
+
+    function categoryLabel(value) {
+        return String(value || "Без группы");
     }
 
     function getLegendItems(preview, chart) {
@@ -482,16 +510,17 @@
         } else if (chart.chart_type === "line") {
             visualizationMarkup = buildLineChartSvg(current);
         } else if (chart.chart_type === "pie") {
-            visualizationMarkup = buildPieChartSvg(current, chart.color);
+            visualizationMarkup = buildPieChartSvg(current, chart);
         } else {
             visualizationMarkup = buildAggregationTableMarkup(current);
         }
         const legendPosition = chart.legend_position || "right";
         const legendItems = getLegendItems(current, chart);
-        const legendMarkup = buildLegendMarkup(legendItems, legendPosition);
-        const isInsideLegend = legendPosition === "inside-top-right" || legendPosition === "inside-top-left";
-        const isRightLegend = legendPosition === "right";
-        const isBottomLegend = legendPosition === "bottom";
+        const effectiveLegendPosition = chart.chart_type === "pie" && chart.pie_label_mode !== "legend" ? "hidden" : legendPosition;
+        const legendMarkup = buildLegendMarkup(legendItems, effectiveLegendPosition);
+        const isInsideLegend = effectiveLegendPosition === "inside-top-right" || effectiveLegendPosition === "inside-top-left";
+        const isRightLegend = effectiveLegendPosition === "right";
+        const isBottomLegend = effectiveLegendPosition === "bottom";
 
         const annotationsMarkup = (chart.annotations || [])
             .map(
@@ -823,6 +852,7 @@
             color: chart.color,
             legend: chart.legend,
             legend_position: chart.legend_position,
+            pie_label_mode: chart.pie_label_mode,
             labels: chart.labels,
             comment_title: chart.comment_title,
             comment_text: chart.comment_text,
@@ -1159,6 +1189,14 @@
                                     <option value="inside-top-right" ${chart.legend_position === "inside-top-right" ? "selected" : ""}>внутри справа сверху</option>
                                     <option value="inside-top-left" ${chart.legend_position === "inside-top-left" ? "selected" : ""}>внутри слева сверху</option>
                                     <option value="hidden" ${chart.legend_position === "hidden" ? "selected" : ""}>скрыта</option>
+                                </select>
+                            </label>
+                            <label>
+                                <span>Режим подписей pie</span>
+                                <select id="select_pie_label_mode_${chartNumber}" data-analysis-field="pie_label_mode" data-chart-index="${index}">
+                                    <option value="legend" ${chart.pie_label_mode === "legend" ? "selected" : ""}>обычная легенда</option>
+                                    <option value="outside" ${chart.pie_label_mode === "outside" ? "selected" : ""}>рядом с секторами</option>
+                                    <option value="outside-with-lines" ${chart.pie_label_mode === "outside-with-lines" ? "selected" : ""}>рядом с секторами + линии</option>
                                 </select>
                             </label>
                             <label class="chart-card-wide">

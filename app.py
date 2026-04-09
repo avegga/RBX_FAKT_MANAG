@@ -27,6 +27,7 @@ ALLOWED_ANALYSIS_CHART_TYPES = {"bar", "line", "pie", "table"}
 ALLOWED_ANALYSIS_SOURCES = {"none", "facts", "file"}
 ALLOWED_ANALYSIS_AGG_FUNCS = {"count", "sum", "avg", "min", "max"}
 ALLOWED_ANALYSIS_LEGEND_POSITIONS = {"right", "bottom", "inside-top-right", "inside-top-left", "hidden"}
+ALLOWED_ANALYSIS_PIE_LABEL_MODES = {"legend", "outside", "outside-with-lines"}
 DEFAULT_STATE = {
     "left_panel_width": 280,
     "right_panel_visible": True,
@@ -155,6 +156,7 @@ class AnalysisChart(db.Model):
     color = db.Column(db.String(40), nullable=False, default="#b7791f")
     legend = db.Column(db.String(120), nullable=False, default="")
     legend_position = db.Column(db.String(40), nullable=False, default="right")
+    pie_label_mode = db.Column(db.String(40), nullable=False, default="legend")
     labels = db.Column(db.String(120), nullable=False, default="")
     comment_title = db.Column(db.String(255), nullable=False, default="")
     comment_text = db.Column(db.Text, nullable=False, default="")
@@ -235,6 +237,7 @@ def serialize_analysis_chart(chart):
         "color": chart.color,
         "legend": chart.legend,
         "legend_position": chart.legend_position,
+        "pie_label_mode": chart.pie_label_mode,
         "labels": chart.labels,
         "comment_title": chart.comment_title,
         "comment_text": chart.comment_text,
@@ -582,6 +585,7 @@ def build_default_analysis_chart(position):
         "color": "#b7791f",
         "legend": "",
         "legend_position": "right",
+        "pie_label_mode": "legend",
         "labels": "",
         "comment_title": "",
         "comment_text": "",
@@ -652,6 +656,7 @@ def normalize_analysis_charts(raw_charts):
         source_kind = (item.get("source_kind") or "none").strip().lower()
         agg_func = (item.get("agg_func") or "count").strip().lower() or "count"
         legend_position = (item.get("legend_position") or "right").strip().lower() or "right"
+        pie_label_mode = (item.get("pie_label_mode") or "legend").strip().lower() or "legend"
         if chart_type not in ALLOWED_ANALYSIS_CHART_TYPES:
             errors.append(f"График #{index + 1}: тип '{chart_type}' не поддерживается.")
             continue
@@ -663,6 +668,9 @@ def normalize_analysis_charts(raw_charts):
             continue
         if legend_position not in ALLOWED_ANALYSIS_LEGEND_POSITIONS:
             errors.append(f"График #{index + 1}: положение легенды '{legend_position}' не поддерживается.")
+            continue
+        if pie_label_mode not in ALLOWED_ANALYSIS_PIE_LABEL_MODES:
+            errors.append(f"График #{index + 1}: режим подписей pie '{pie_label_mode}' не поддерживается.")
             continue
 
         charts.append(
@@ -676,6 +684,7 @@ def normalize_analysis_charts(raw_charts):
                 "color": (item.get("color") or "#b7791f").strip() or "#b7791f",
                 "legend": (item.get("legend") or "").strip(),
                 "legend_position": legend_position,
+                "pie_label_mode": pie_label_mode,
                 "labels": (item.get("labels") or "").strip(),
                 "comment_title": (item.get("comment_title") or "").strip()[:255],
                 "comment_text": str(item.get("comment_text") or "").strip(),
@@ -721,6 +730,7 @@ def replace_analysis_type_charts(analysis_type, charts):
                 color=item["color"],
                 legend=item["legend"],
                 legend_position=item["legend_position"],
+                pie_label_mode=item["pie_label_mode"],
                 labels=item["labels"],
                 comment_title=item["comment_title"],
                 comment_text=item["comment_text"],
@@ -737,6 +747,7 @@ def ensure_analysis_chart_schema():
         "comment_text": "ALTER TABLE analysis_charts ADD COLUMN comment_text TEXT NOT NULL DEFAULT ''",
         "annotations_json": "ALTER TABLE analysis_charts ADD COLUMN annotations_json TEXT NOT NULL DEFAULT '[]'",
         "legend_position": "ALTER TABLE analysis_charts ADD COLUMN legend_position VARCHAR(40) NOT NULL DEFAULT 'right'",
+        "pie_label_mode": "ALTER TABLE analysis_charts ADD COLUMN pie_label_mode VARCHAR(40) NOT NULL DEFAULT 'legend'",
     }
 
     with db.engine.begin() as connection:
