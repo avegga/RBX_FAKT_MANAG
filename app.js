@@ -149,6 +149,7 @@ const DEFAULT_SAVE_STATUS_TEXT = "Готово к работе";
 let stateSaveTimer = null;
 let settingsSaveTimer = null;
 let activeResize = null;
+let tableLayoutFrame = null;
 
 const elements = {
     body: document.body,
@@ -203,6 +204,7 @@ const elements = {
     dataTableShell: document.getElementById("data-table-shell"),
     dataTableHeader: document.getElementById("data-table-header"),
     dataTableViewport: document.getElementById("data-table-viewport"),
+    dataTableSurface: document.getElementById("data-table-surface"),
     dataTableSpacerTop: document.getElementById("data-table-spacer-top"),
     dataTableRows: document.getElementById("data-table-rows"),
     dataTableSpacerBottom: document.getElementById("data-table-spacer-bottom"),
@@ -241,14 +243,15 @@ function escapeHtml(value) {
         .replaceAll('"', "&quot;");
 }
 
-function setStatus(message, level = "info") {
+function setStatus(message, level = "info", options = {}) {
+    const emphasize = Boolean(options.emphasize);
     if (isFactsTabActive()) {
         elements.saveStatus.hidden = true;
         elements.saveStatus.textContent = DEFAULT_SAVE_STATUS_TEXT;
         delete elements.saveStatus.dataset.level;
         if (elements.serviceMessage) {
             elements.serviceMessage.textContent = message;
-            elements.serviceMessage.className = `service-message ${level}`;
+            elements.serviceMessage.className = `service-message ${level}${emphasize ? " service-message-emphasis" : ""}`;
         }
         return;
     }
@@ -540,6 +543,7 @@ function applyUiState() {
     elements.toggleRightPanelButton.textContent = ui.right_panel_visible ? "Скрыть панель" : "Показать панель";
 
     syncStateLabels();
+    scheduleTableLayoutSync();
 }
 
 function syncStateLabels() {
@@ -1460,6 +1464,47 @@ function getGridTemplate() {
     return ["72px", ...visibleColumns.map((column) => `${Math.max(MIN_COLUMN_WIDTH, column.width || DEFAULT_COLUMN_WIDTH)}px`)].join(" ");
 }
 
+function getTableContentWidth() {
+    const visibleColumns = state.table.derived.visibleColumns;
+    if (!visibleColumns.length) {
+        return 72 + 160;
+    }
+
+    return 72 + visibleColumns.reduce(
+        (total, column) => total + Math.max(MIN_COLUMN_WIDTH, column.width || DEFAULT_COLUMN_WIDTH),
+        0
+    );
+}
+
+function syncTableLayout() {
+    if (!elements.dataTableShell || elements.dataTableShell.classList.contains("hidden")) {
+        return;
+    }
+
+    const tableWidth = getTableContentWidth();
+    const viewportWidth = elements.dataTableViewport?.clientWidth || tableWidth;
+    const surfaceWidth = Math.max(tableWidth, viewportWidth);
+
+    if (elements.dataTableSurface) {
+        elements.dataTableSurface.style.width = `${surfaceWidth}px`;
+    }
+
+    if (elements.dataTableHeader) {
+        elements.dataTableHeader.style.width = `${tableWidth}px`;
+    }
+}
+
+function scheduleTableLayoutSync() {
+    if (tableLayoutFrame !== null) {
+        window.cancelAnimationFrame(tableLayoutFrame);
+    }
+
+    tableLayoutFrame = window.requestAnimationFrame(() => {
+        tableLayoutFrame = null;
+        syncTableLayout();
+    });
+}
+
 function renderDatasetStats() {
     const totalRows = state.dataset.row_count || 0;
     const filteredRows = state.table.derived.filteredRows.length;
@@ -1491,11 +1536,13 @@ function renderHeader() {
     const visibleColumns = state.table.derived.visibleColumns;
     if (!visibleColumns.length) {
         elements.dataTableHeader.innerHTML = "";
+        scheduleTableLayoutSync();
         return;
     }
 
     const gridTemplate = getGridTemplate();
     elements.dataTableHeader.style.gridTemplateColumns = gridTemplate;
+    elements.dataTableHeader.style.width = `${getTableContentWidth()}px`;
     const headerCells = ['<div class="table-cell index-head">#</div>'];
     visibleColumns.forEach((column) => {
         headerCells.push(`
@@ -1512,11 +1559,13 @@ function renderHeader() {
         `);
     });
     elements.dataTableHeader.innerHTML = headerCells.join("");
+    scheduleTableLayoutSync();
 }
 
 function renderRows(startIndex, endIndex) {
     const visibleColumns = state.table.derived.visibleColumns;
     const gridTemplate = getGridTemplate();
+    const tableWidth = getTableContentWidth();
     const rows = state.table.derived.displayRows.slice(startIndex, endIndex);
     elements.dataTableRows.innerHTML = rows
         .map((row) => {
@@ -1528,7 +1577,7 @@ function renderRows(startIndex, endIndex) {
                     `<div class="table-cell data-cell ${hasError ? "cell-error" : ""}" title="${escapeHtml(cell.display)}">${escapeHtml(cell.display)}</div>`
                 );
             });
-            return `<div class="table-row" style="grid-template-columns:${gridTemplate}">${cells.join("")}</div>`;
+            return `<div class="table-row" style="grid-template-columns:${gridTemplate};width:${tableWidth}px">${cells.join("")}</div>`;
         })
         .join("");
 }
@@ -1541,6 +1590,7 @@ function renderVirtualRows() {
         elements.dataTableRows.innerHTML = '<div class="table-row empty-table-row"><div class="table-cell data-cell empty-cell">Все столбцы скрыты. Включите хотя бы один столбец во вкладке Столбцы.</div></div>';
         elements.dataTableSpacerTop.style.height = "0px";
         elements.dataTableSpacerBottom.style.height = "0px";
+        scheduleTableLayoutSync();
         return;
     }
 
@@ -1551,18 +1601,22 @@ function renderVirtualRows() {
         elements.dataTableRows.innerHTML = `<div class="table-row empty-table-row"><div class="table-cell data-cell empty-cell">${escapeHtml(message)}</div></div>`;
         elements.dataTableSpacerTop.style.height = "0px";
         elements.dataTableSpacerBottom.style.height = "0px";
+        scheduleTableLayoutSync();
         return;
     }
 
+    const headerHeight = elements.dataTableHeader.offsetHeight || 0;
     const viewportHeight = elements.dataTableViewport.clientHeight || 480;
-    const scrollTop = elements.dataTableViewport.scrollTop;
-    const visibleCount = Math.ceil(viewportHeight / rowHeight) + rowOverscan * 2;
+    const rowViewportHeight = Math.max(rowHeight, viewportHeight - headerHeight);
+    const scrollTop = Math.max(0, elements.dataTableViewport.scrollTop - headerHeight);
+    const visibleCount = Math.ceil(rowViewportHeight / rowHeight) + rowOverscan * 2;
     const startIndex = Math.max(0, Math.floor(scrollTop / rowHeight) - rowOverscan);
     const endIndex = Math.min(displayRows.length, startIndex + visibleCount);
 
     elements.dataTableSpacerTop.style.height = `${startIndex * rowHeight}px`;
     elements.dataTableSpacerBottom.style.height = `${(displayRows.length - endIndex) * rowHeight}px`;
     renderRows(startIndex, endIndex);
+    scheduleTableLayoutSync();
 }
 
 function renderDataset() {
@@ -1580,6 +1634,9 @@ function renderDataset() {
         elements.dataTableHeader.innerHTML = "";
         elements.dataTableSpacerTop.style.height = "0px";
         elements.dataTableSpacerBottom.style.height = "0px";
+        if (elements.dataTableSurface) {
+            elements.dataTableSurface.style.width = "";
+        }
         return;
     }
 
@@ -2264,7 +2321,7 @@ async function exportCurrentDataset() {
             }),
         });
         await loadJournal();
-        setStatus(`Результат сохранён: ${response.file_name}.`, "success");
+        setStatus(`Результат сохранён: ${response.file_name}.`, "success", { emphasize: true });
     } catch (error) {
         setStatus(error.error || "Не удалось сохранить XLSX.", "error");
     }
@@ -2604,6 +2661,7 @@ function bindEvents() {
         );
     });
     elements.dataTableViewport.addEventListener("scroll", renderVirtualRows);
+    window.addEventListener("resize", scheduleTableLayoutSync);
     elements.workspaceSplitter?.addEventListener("mousedown", (event) => startResize("vertical", event));
     elements.errorsSplitter?.addEventListener("mousedown", (event) => startResize("horizontal", event));
 }

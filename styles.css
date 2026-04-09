@@ -489,6 +489,11 @@ input[type="range"] {
     color: var(--muted);
 }
 
+.service-message.service-message-emphasis {
+    font-size: 14.4px;
+    font-weight: 700;
+}
+
 .service-message.warning {
     color: #8a5a00;
 }
@@ -662,9 +667,9 @@ input[type="range"] {
 }
 
 .data-table-shell {
-    display: grid;
-    grid-template-rows: auto minmax(0, 1fr);
+    display: block;
     height: 520px;
+    min-width: 0;
 }
 
 .data-table-header,
@@ -675,6 +680,7 @@ input[type="range"] {
 .data-table-header {
     position: sticky;
     top: 0;
+    left: 0;
     z-index: 2;
     border-bottom: 1px solid var(--border);
     background: rgba(244, 239, 230, 0.95);
@@ -682,7 +688,12 @@ input[type="range"] {
 
 .data-table-viewport {
     overflow: auto;
-    height: 468px;
+    height: 100%;
+    min-width: 0;
+}
+
+.data-table-surface {
+    min-width: 100%;
 }
 
 .table-cell {
