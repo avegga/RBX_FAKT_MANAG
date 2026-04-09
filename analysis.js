@@ -72,6 +72,7 @@
     let userStateSaveTimer = null;
     let activeTableResize = null;
     let activeAnnotationDrag = null;
+    let sheetLayoutFrame = null;
 
     const elements = {
         shell: document.getElementById("analysis-shell"),
@@ -561,6 +562,7 @@
     function buildSheetCardMarkup(chart, preview, index) {
         const title = escapeHtml(getChartDisplayTitle(chart, index));
         const compatibility = getChartCompatibility(chart);
+        const hasComment = Boolean(String(chart.comment_title || "").trim() || String(chart.comment_text || "").trim());
         return `
             <article class="analysis-sheet-card ${compatibility.ok ? "" : "is-incompatible"}">
                 <div class="analysis-sheet-card-head">
@@ -570,8 +572,10 @@
                     </div>
                     <span class="analysis-sheet-card-status ${compatibility.ok ? "" : "warning"}">${compatibility.ok ? "Готов" : "Нужна настройка"}</span>
                 </div>
-                ${buildChartPreviewMarkup(preview, chart)}
-                ${buildChartCommentMarkup(chart)}
+                <div class="analysis-sheet-card-body ${hasComment ? "has-comment" : ""}">
+                    ${buildChartPreviewMarkup(preview, chart)}
+                    ${hasComment ? buildChartCommentMarkup(chart) : ""}
+                </div>
             </article>
         `;
     }
@@ -1021,10 +1025,41 @@
 
     function renderViewMode() {
         const isSheet = state.viewMode === "sheet";
+        elements.shell?.classList.toggle("analysis-presentation-mode", isSheet);
         elements.mainView?.classList.toggle("hidden", isSheet);
         elements.sheetView?.classList.toggle("hidden", !isSheet);
         elements.editorViewButton?.classList.toggle("active", !isSheet);
         elements.sheetViewButton?.classList.toggle("active", isSheet);
+        updateSheetViewportLayout();
+    }
+
+    function updateSheetViewportLayout() {
+        if (!elements.sheetView) {
+            return;
+        }
+
+        if (state.viewMode !== "sheet") {
+            elements.sheetView.style.removeProperty("height");
+            elements.sheetView.style.removeProperty("max-height");
+            return;
+        }
+
+        const rect = elements.sheetView.getBoundingClientRect();
+        const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+        const availableHeight = Math.max(360, Math.floor(viewportHeight - rect.top - 16));
+        elements.sheetView.style.height = `${availableHeight}px`;
+        elements.sheetView.style.maxHeight = `${availableHeight}px`;
+    }
+
+    function scheduleSheetViewportLayout() {
+        if (sheetLayoutFrame !== null) {
+            cancelAnimationFrame(sheetLayoutFrame);
+        }
+
+        sheetLayoutFrame = requestAnimationFrame(() => {
+            sheetLayoutFrame = null;
+            updateSheetViewportLayout();
+        });
     }
 
     function renderSheetView() {
@@ -1035,6 +1070,7 @@
         const cards = state.draft.charts.slice(0, 4);
         if (!cards.length) {
             elements.sheetGrid.innerHTML = '<div class="analysis-sheet-empty">Добавьте до четырех графиков, чтобы увидеть общий лист 2x2.</div>';
+            scheduleSheetViewportLayout();
             return;
         }
 
@@ -1063,6 +1099,7 @@
         }
 
         elements.sheetGrid.innerHTML = markup.join("");
+        scheduleSheetViewportLayout();
     }
 
     function getAnalysisColumnWidth(columnName) {
@@ -1730,6 +1767,8 @@
             scheduleUserStateSave({ table_search: state.table.search });
             renderTable();
         });
+        window.addEventListener("resize", scheduleSheetViewportLayout);
+        window.addEventListener("orientationchange", scheduleSheetViewportLayout);
         elements.sortResetButton.addEventListener("click", () => {
             state.table.sortColumn = "";
             state.table.sortDirection = "asc";
