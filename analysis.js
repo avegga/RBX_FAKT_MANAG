@@ -4,9 +4,11 @@
         selected_analysis_type_id: null,
         left_panel_width: 260,
         visual_source_kind: "none",
+        view_mode: "editor",
         table_search: "",
         table_sort_column: "",
         table_sort_direction: "asc",
+        table_column_widths: {},
         draft_state: null,
     };
     const emptyDataset = () => ({
@@ -33,10 +35,14 @@
         legend: "",
         legend_position: "right",
         pie_label_mode: "legend",
+        pie_value_mode: "value",
+        pie_center_mode: "total",
+        pie_sector_label_mode: "name-percent",
         labels: "",
         comment_title: "",
         comment_text: "",
         annotations: [],
+        pie_sector_label_offsets: [],
         is_hidden: false,
         ui_collapsed: false,
         position,
@@ -70,8 +76,11 @@
     let chartPreviewTimer = null;
     let chartPreviewRequestId = 0;
     let userStateSaveTimer = null;
+    let pendingUserStatePatch = null;
+    let activeUserStateSavePromise = null;
     let activeTableResize = null;
     let activeAnnotationDrag = null;
+    let activePieSectorLabelDrag = null;
     let sheetLayoutFrame = null;
 
     const elements = {
@@ -84,6 +93,8 @@
         typeSelect: document.getElementById("select_analysis_type"),
         editorViewButton: document.getElementById("btn_analysis_editor_view"),
         sheetViewButton: document.getElementById("btn_analysis_sheet_view"),
+        pairViewButton: document.getElementById("btn_analysis_pair_view"),
+        quadViewButton: document.getElementById("btn_analysis_quad_view"),
         createTypeButton: document.getElementById("btn_create_analysis_type"),
         deleteTypeButton: document.getElementById("btn_delete_analysis_type"),
         saveTypeButton: document.getElementById("btn_save_analysis_type"),
@@ -100,6 +111,8 @@
         retryUseFactsButton: document.getElementById("btn_retry_use_facts"),
         mainView: document.getElementById("analysis-main"),
         sheetView: document.getElementById("analysis-sheet-view"),
+        sheetTitle: document.getElementById("analysis-sheet-title"),
+        sheetDescription: document.getElementById("analysis-sheet-description"),
         sheetGrid: document.getElementById("analysis-sheet-grid"),
         tableWrap: document.getElementById("analysis-table-wrap"),
         tableElement: document.getElementById("data_table"),
@@ -151,7 +164,8 @@
     function loadAnalysisUiPreferences() {
         try {
             const viewMode = localStorage.getItem("analysis-view-mode");
-            state.viewMode = viewMode === "sheet" ? "sheet" : "editor";
+            state.viewMode = viewMode === "sheet" || viewMode === "pair" || viewMode === "quad" ? viewMode : "editor";
+            state.userState.view_mode = state.viewMode;
         } catch {
             state.viewMode = "editor";
         }
@@ -160,6 +174,7 @@
             const rawWidths = localStorage.getItem("analysis-table-column-widths");
             const parsed = rawWidths ? JSON.parse(rawWidths) : {};
             state.table.columnWidths = parsed && typeof parsed === "object" ? parsed : {};
+            state.userState.table_column_widths = state.table.columnWidths;
         } catch {
             state.table.columnWidths = {};
         }
@@ -170,6 +185,20 @@
             localStorage.setItem("analysis-view-mode", state.viewMode);
             localStorage.setItem("analysis-table-column-widths", JSON.stringify(state.table.columnWidths || {}));
         } catch {}
+    }
+
+    function applyPersistedAnalysisUiState() {
+        const persistedViewMode = state.userState.view_mode;
+        if (persistedViewMode === "sheet" || persistedViewMode === "pair" || persistedViewMode === "quad" || persistedViewMode === "editor") {
+            state.viewMode = persistedViewMode;
+        }
+
+        const persistedWidths = state.userState.table_column_widths;
+        if (persistedWidths && typeof persistedWidths === "object" && !Array.isArray(persistedWidths) && Object.keys(persistedWidths).length) {
+            state.table.columnWidths = { ...persistedWidths };
+        }
+
+        persistAnalysisUiPreferences();
     }
 
     function renderMessage() {
@@ -255,9 +284,194 @@
         return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(number);
     }
 
-    function shortenAxisLabel(value) {
+    function formatCompactPreviewNumber(value) {
+        const number = Number(value);
+        if (!Number.isFinite(number)) {
+            return String(value ?? "");
+        }
+
+        const absValue = Math.abs(number);
+        if (absValue >= 1000000) {
+            return `${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1 }).format(number / 1000000)} млн`;
+        }
+        if (absValue >= 1000) {
+            return `${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1 }).format(number / 1000)} тыс`;
+        }
+        return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 1 }).format(number);
+    }
+
+    function shortenAxisLabel(value, maxLength = 12) {
         const text = String(value ?? "");
-        return text.length > 12 ? `${text.slice(0, 11)}…` : text;
+        if (maxLength <= 1) {
+            return text.slice(0, 1);
+        }
+        return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+    }
+
+    function getChartRenderOptions(options = {}, chart = null) {
+        const compact = Boolean(options.compact);
+        const hideWarnings = Boolean(options.hideWarnings);
+        const hideHead = Boolean(options.hideHead || compact);
+        const hideMeta = Boolean(options.hideMeta || compact);
+        const layoutMode = options.layoutMode || "editor";
+        let legendPosition = options.legendPosition || chart?.legend_position || "right";
+
+        if (compact) {
+            if (chart?.chart_type === "pie") {
+                legendPosition = "bottom";
+            } else if (legendPosition === "right" || legendPosition === "left") {
+                legendPosition = "bottom";
+            }
+        }
+
+        return {
+            compact,
+            hideWarnings,
+            hideHead,
+            hideMeta,
+            layoutMode,
+            legendPosition,
+        };
+    }
+
+    function buildCompactAxisLabel(value, maxLength = 7) {
+        return shortenAxisLabel(value, maxLength);
+    }
+
+    function normalizePieSectorLabelOffsets(rawOffsets) {
+        if (!Array.isArray(rawOffsets)) {
+            return [];
+        }
+
+        return rawOffsets
+            .map((item) => {
+                const index = Number(item?.index);
+                const dx = Number(item?.dx);
+                const dy = Number(item?.dy);
+                if (!Number.isFinite(index) || index < 0) {
+                    return null;
+                }
+                return {
+                    index,
+                    dx: clamp(Number.isFinite(dx) ? dx : 0, -100, 100),
+                    dy: clamp(Number.isFinite(dy) ? dy : 0, -100, 100),
+                };
+            })
+            .filter(Boolean)
+            .slice(0, 24);
+    }
+
+    function formatPiePercent(value, total) {
+        const numericValue = Number(value || 0);
+        const numericTotal = Number(total || 0);
+        if (!numericTotal) {
+            return "0%";
+        }
+
+        const percent = (numericValue / numericTotal) * 100;
+        const precision = percent >= 10 || Number.isInteger(percent) ? 0 : 1;
+        return `${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: precision }).format(percent)}%`;
+    }
+
+    function buildPieValueText(value, total, mode, compact = false) {
+        const numericMode = mode || "value";
+        const valueText = compact ? formatCompactPreviewNumber(value) : formatPreviewNumber(value);
+        const percentText = formatPiePercent(value, total);
+
+        if (numericMode === "percent") {
+            return percentText;
+        }
+        if (numericMode === "value-percent") {
+            return `${valueText} (${percentText})`;
+        }
+        return valueText;
+    }
+
+    function buildPieCenterContent(total, chart, compact = false) {
+        const centerMode = chart?.pie_center_mode || "total";
+        if (centerMode === "hidden") {
+            return "";
+        }
+
+        return compact ? formatCompactPreviewNumber(total) : formatPreviewNumber(total);
+    }
+
+    function buildPieSectorLabelText(category, value, total, mode, compact = false) {
+        const sectorMode = mode || "name-percent";
+        const categoryText = compact ? shortenAxisLabel(categoryLabel(category), 10) : categoryLabel(category);
+        const valueText = formatCompactPreviewNumber(value);
+        const percentText = buildPieValueText(value, total, "percent", compact);
+
+        if (sectorMode === "name") {
+            return categoryText;
+        }
+        if (sectorMode === "value") {
+            return valueText;
+        }
+        if (sectorMode === "percent") {
+            return percentText;
+        }
+        if (sectorMode === "value-percent") {
+            return `${valueText} (${percentText})`;
+        }
+        if (sectorMode === "name-value") {
+            return `${categoryText} ${valueText}`;
+        }
+        if (sectorMode === "name-value-percent") {
+            return `${categoryText} ${valueText} (${percentText})`;
+        }
+        return `${categoryText} ${percentText}`;
+    }
+
+    function distributePieLabels(items, minGap, minY, maxY) {
+        const ordered = items.slice().sort((left, right) => left.y - right.y);
+        let previousY = minY - minGap;
+
+        ordered.forEach((item) => {
+            item.y = Math.max(item.y, previousY + minGap);
+            previousY = item.y;
+        });
+
+        if (ordered.length) {
+            let nextY = maxY + minGap;
+            for (let index = ordered.length - 1; index >= 0; index -= 1) {
+                ordered[index].y = Math.min(ordered[index].y, nextY - minGap);
+                nextY = ordered[index].y;
+            }
+        }
+
+        ordered.forEach((item) => {
+            item.y = clamp(item.y, minY, maxY);
+        });
+
+        return ordered;
+    }
+
+    function getEffectivePieLabelMode(preview, chart, options = {}) {
+        if (options.compact) {
+            return "hidden";
+        }
+
+        const requestedMode = chart?.pie_label_mode || "legend";
+        if (requestedMode === "legend") {
+            return "hidden";
+        }
+
+        const values = preview?.series?.[0]?.values || [];
+        const total = values.reduce((sum, value) => sum + Number(value || 0), 0);
+        const sectorLabelMode = chart?.pie_sector_label_mode || "name-percent";
+        const labels = (preview?.categories || []).map((category, index) =>
+            buildPieSectorLabelText(category, values[index] || 0, total, sectorLabelMode, false)
+        );
+        const longestLabelLength = Math.max(0, ...labels.map((label) => String(label).length));
+        const totalLabelLength = labels.reduce((sum, label) => sum + String(label).length, 0);
+
+        // Fallback hides only sector labels; legend remains controlled independently.
+        if (labels.length > 6 || longestLabelLength > 28 || totalLabelLength > 120) {
+            return "hidden";
+        }
+
+        return requestedMode === "outside-with-lines" ? "outside-with-lines" : "outside";
     }
 
     function buildSeriesLegendMarkup(series) {
@@ -270,12 +484,13 @@
         }));
     }
 
-    function buildBarChartSvg(preview) {
+    function buildBarChartSvg(preview, options = {}) {
         const categories = preview.categories || [];
         const series = preview.series || [];
-        const width = 360;
-        const height = 190;
-        const padding = { top: 14, right: 10, bottom: 34, left: 38 };
+        const compact = Boolean(options.compact);
+        const width = compact ? 320 : 360;
+        const height = compact ? 150 : 190;
+        const padding = compact ? { top: 10, right: 8, bottom: 24, left: 28 } : { top: 14, right: 10, bottom: 34, left: 38 };
         const plotWidth = width - padding.left - padding.right;
         const plotHeight = height - padding.top - padding.bottom;
         const allValues = series.flatMap((item) => item.values || []);
@@ -283,19 +498,22 @@
         const bandWidth = categories.length ? plotWidth / categories.length : plotWidth;
         const seriesCount = Math.max(series.length, 1);
         const barGroupWidth = bandWidth * 0.72;
-        const barWidth = Math.max(8, barGroupWidth / seriesCount - 4);
+        const barWidth = Math.max(compact ? 4 : 8, barGroupWidth / seriesCount - (compact ? 2 : 4));
+        const labelStep = compact && categories.length > 6 ? Math.ceil(categories.length / 4) : 1;
 
         const bars = [];
         const labels = [];
         categories.forEach((category, categoryIndex) => {
             const groupX = padding.left + categoryIndex * bandWidth + (bandWidth - barGroupWidth) / 2;
-            labels.push(`<text x="${groupX + barGroupWidth / 2}" y="${height - 10}" text-anchor="middle">${escapeHtml(shortenAxisLabel(category))}</text>`);
+            if (!compact || categoryIndex % labelStep === 0 || categoryIndex === categories.length - 1) {
+                labels.push(`<text x="${groupX + barGroupWidth / 2}" y="${height - (compact ? 6 : 10)}" text-anchor="middle">${escapeHtml(compact ? buildCompactAxisLabel(category) : shortenAxisLabel(category))}</text>`);
+            }
             series.forEach((item, seriesIndex) => {
                 const value = Number(item.values?.[categoryIndex] || 0);
                 const barHeight = maxValue ? (value / maxValue) * plotHeight : 0;
-                const x = groupX + seriesIndex * (barWidth + 4);
+                const x = groupX + seriesIndex * (barWidth + (compact ? 2 : 4));
                 const y = padding.top + plotHeight - barHeight;
-                bars.push(`<rect x="${x}" y="${y}" width="${barWidth}" height="${barHeight}" rx="4" fill="${escapeHtml(item.color || "#b7791f")}"></rect>`);
+                bars.push(`<rect x="${x}" y="${y}" width="${barWidth}" height="${barHeight}" rx="${compact ? 2 : 4}" fill="${escapeHtml(item.color || "#b7791f")}"></rect>`);
             });
         });
 
@@ -303,25 +521,27 @@
             <svg viewBox="0 0 ${width} ${height}" class="analysis-chart-svg" aria-label="Столбчатая диаграмма">
                 <line x1="${padding.left}" y1="${padding.top}" x2="${padding.left}" y2="${padding.top + plotHeight}" stroke="#c7b9a6" />
                 <line x1="${padding.left}" y1="${padding.top + plotHeight}" x2="${width - padding.right}" y2="${padding.top + plotHeight}" stroke="#c7b9a6" />
-                <text x="${padding.left - 8}" y="${padding.top + 8}" text-anchor="end">${escapeHtml(formatPreviewNumber(maxValue))}</text>
-                <text x="${padding.left - 8}" y="${padding.top + plotHeight}" text-anchor="end">0</text>
+                <text x="${padding.left - (compact ? 5 : 8)}" y="${padding.top + 8}" text-anchor="end">${escapeHtml(compact ? formatCompactPreviewNumber(maxValue) : formatPreviewNumber(maxValue))}</text>
+                <text x="${padding.left - (compact ? 5 : 8)}" y="${padding.top + plotHeight}" text-anchor="end">0</text>
                 ${bars.join("")}
                 ${labels.join("")}
             </svg>
         `;
     }
 
-    function buildLineChartSvg(preview) {
+    function buildLineChartSvg(preview, options = {}) {
         const categories = preview.categories || [];
         const series = preview.series || [];
-        const width = 360;
-        const height = 190;
-        const padding = { top: 14, right: 10, bottom: 34, left: 38 };
+        const compact = Boolean(options.compact);
+        const width = compact ? 320 : 360;
+        const height = compact ? 150 : 190;
+        const padding = compact ? { top: 10, right: 8, bottom: 24, left: 28 } : { top: 14, right: 10, bottom: 34, left: 38 };
         const plotWidth = width - padding.left - padding.right;
         const plotHeight = height - padding.top - padding.bottom;
         const allValues = series.flatMap((item) => item.values || []);
         const maxValue = Math.max(1, ...allValues, 0);
         const stepX = categories.length > 1 ? plotWidth / (categories.length - 1) : plotWidth / 2;
+        const labelStep = compact && categories.length > 6 ? Math.ceil(categories.length / 4) : 1;
 
         const polylines = series
             .map((item) => {
@@ -334,17 +554,20 @@
                     .map((value, index) => {
                         const x = padding.left + (categories.length > 1 ? index * stepX : plotWidth / 2);
                         const y = padding.top + plotHeight - (Number(value || 0) / maxValue) * plotHeight;
-                        return `<circle cx="${x}" cy="${y}" r="3.5" fill="${escapeHtml(item.color || "#b7791f")}"></circle>`;
+                        return `<circle cx="${x}" cy="${y}" r="${compact ? 2.25 : 3.5}" fill="${escapeHtml(item.color || "#b7791f")}"></circle>`;
                     })
                     .join("");
-                return `<polyline fill="none" stroke="${escapeHtml(item.color || "#b7791f")}" stroke-width="2.5" points="${points.join(" ")}"></polyline>${dots}`;
+                return `<polyline fill="none" stroke="${escapeHtml(item.color || "#b7791f")}" stroke-width="${compact ? 2 : 2.5}" points="${points.join(" ")}"></polyline>${dots}`;
             })
             .join("");
 
         const labels = categories
             .map((category, index) => {
+                if (compact && index % labelStep !== 0 && index !== categories.length - 1) {
+                    return "";
+                }
                 const x = padding.left + (categories.length > 1 ? index * stepX : plotWidth / 2);
-                return `<text x="${x}" y="${height - 10}" text-anchor="middle">${escapeHtml(shortenAxisLabel(category))}</text>`;
+                return `<text x="${x}" y="${height - (compact ? 6 : 10)}" text-anchor="middle">${escapeHtml(compact ? buildCompactAxisLabel(category) : shortenAxisLabel(category))}</text>`;
             })
             .join("");
 
@@ -352,24 +575,40 @@
             <svg viewBox="0 0 ${width} ${height}" class="analysis-chart-svg" aria-label="Линейный график">
                 <line x1="${padding.left}" y1="${padding.top}" x2="${padding.left}" y2="${padding.top + plotHeight}" stroke="#c7b9a6" />
                 <line x1="${padding.left}" y1="${padding.top + plotHeight}" x2="${width - padding.right}" y2="${padding.top + plotHeight}" stroke="#c7b9a6" />
-                <text x="${padding.left - 8}" y="${padding.top + 8}" text-anchor="end">${escapeHtml(formatPreviewNumber(maxValue))}</text>
-                <text x="${padding.left - 8}" y="${padding.top + plotHeight}" text-anchor="end">0</text>
+                <text x="${padding.left - (compact ? 5 : 8)}" y="${padding.top + 8}" text-anchor="end">${escapeHtml(compact ? formatCompactPreviewNumber(maxValue) : formatPreviewNumber(maxValue))}</text>
+                <text x="${padding.left - (compact ? 5 : 8)}" y="${padding.top + plotHeight}" text-anchor="end">0</text>
                 ${polylines}
                 ${labels}
             </svg>
         `;
     }
 
-    function buildPieChartSvg(preview, chart) {
+    function buildPieChartSvg(preview, chart, options = {}) {
         const categories = preview.categories || [];
         const values = preview.series?.[0]?.values || [];
         const total = values.reduce((sum, value) => sum + Number(value || 0), 0);
-        const pieLabelMode = chart.pie_label_mode || "legend";
-        const width = pieLabelMode === "legend" ? 220 : 320;
-        const height = 200;
-        const cx = pieLabelMode === "legend" ? 92 : 110;
-        const cy = 98;
-        const radius = pieLabelMode === "legend" ? 62 : 58;
+        const compact = Boolean(options.compact);
+        const isQuad = options.layoutMode === "quad";
+        const chartIndex = Number.isFinite(chart?.position) ? chart.position : 0;
+        const effectivePieLabelMode = getEffectivePieLabelMode(preview, chart, options);
+        const pieValueMode = chart?.pie_value_mode || "value";
+        const centerText = buildPieCenterContent(total, chart, compact);
+        const sectorLabelMode = chart?.pie_sector_label_mode || "name-percent";
+        const labelOffsets = new Map(normalizePieSectorLabelOffsets(chart?.pie_sector_label_offsets).map((item) => [item.index, item]));
+        const isSideLegend = options.legendPosition === "right" || options.legendPosition === "left";
+        const width = compact
+            ? 220
+            : isQuad
+            ? (effectivePieLabelMode === "hidden" ? 248 : (isSideLegend ? 264 : 308))
+                : (effectivePieLabelMode === "hidden" ? 220 : 360);
+        const height = compact ? 132 : isQuad ? (isSideLegend ? 156 : 182) : 220;
+        const cx = compact
+            ? width / 2
+            : isQuad
+                ? (effectivePieLabelMode === "hidden" ? width / 2 : (isSideLegend ? 96 : 114))
+                : (effectivePieLabelMode === "hidden" ? 92 : 118);
+        const cy = compact ? 68 : isQuad ? (isSideLegend ? 78 : 96) : 108;
+        const radius = compact ? 42 : isQuad ? (effectivePieLabelMode === "hidden" ? 54 : (isSideLegend ? 44 : 56)) : (effectivePieLabelMode === "hidden" ? 62 : 64);
 
         if (!total) {
             return "";
@@ -377,6 +616,8 @@
 
         let angle = -Math.PI / 2;
         const labelMarks = [];
+        const leftLabels = [];
+        const rightLabels = [];
         const slices = values
             .map((value, index) => {
                 const numericValue = Number(value || 0);
@@ -389,35 +630,82 @@
                 const largeArc = nextAngle - angle > Math.PI ? 1 : 0;
                 const color = pickPreviewColor(index, chart.color || "#b7791f");
                 const midAngle = angle + (nextAngle - angle) / 2;
-                if (pieLabelMode !== "legend") {
-                    const textRadius = pieLabelMode === "outside-with-lines" ? radius + 28 : radius + 18;
-                    const labelX = cx + Math.cos(midAngle) * textRadius;
-                    const labelY = cy + Math.sin(midAngle) * textRadius;
+                if (!compact && effectivePieLabelMode !== "hidden") {
+                    const textRadius = effectivePieLabelMode === "outside-with-lines"
+                        ? radius + (isQuad ? (isSideLegend ? 20 : 26) : 38)
+                        : radius + (isQuad ? (isSideLegend ? 12 : 18) : 24);
                     const anchor = Math.cos(midAngle) >= 0 ? "start" : "end";
-                    const percent = Math.round(ratio * 1000) / 10;
-                    const text = `${categoryLabel(categories[index])} ${formatPreviewNumber(numericValue)} (${formatPreviewNumber(percent)}%)`;
-
-                    if (pieLabelMode === "outside-with-lines") {
-                        const lineStartX = cx + Math.cos(midAngle) * (radius - 2);
-                        const lineStartY = cy + Math.sin(midAngle) * (radius - 2);
-                        const lineBendX = cx + Math.cos(midAngle) * (radius + 8);
-                        const lineBendY = cy + Math.sin(midAngle) * (radius + 8);
-                        const lineEndX = labelX + (anchor === "start" ? -6 : 6);
-                        labelMarks.push(`<polyline points="${lineStartX},${lineStartY} ${lineBendX},${lineBendY} ${lineEndX},${labelY}" fill="none" stroke="#9b8a75" stroke-width="1"></polyline>`);
+                    const text = buildPieSectorLabelText(categories[index], numericValue, total, sectorLabelMode, false);
+                    const shortenedText = shortenAxisLabel(text, isQuad ? (isSideLegend ? 14 : 17) : 22);
+                    const approxCharWidth = isQuad ? 5.0 : 6.1;
+                    const textWidth = shortenedText.length * approxCharWidth;
+                    const edgePadding = isQuad ? 8 : 12;
+                    const rawLabelX = cx + Math.cos(midAngle) * textRadius;
+                    const labelX = anchor === "start"
+                        ? Math.min(rawLabelX, width - textWidth - edgePadding)
+                        : Math.max(rawLabelX, textWidth + edgePadding);
+                    const labelY = cy + Math.sin(midAngle) * textRadius;
+                    const entry = {
+                        sectorIndex: index,
+                        x: labelX,
+                        y: labelY,
+                        anchor,
+                        text: shortenedText,
+                        textWidth,
+                        textHeight: isQuad ? 12.4 : 12,
+                        withLine: effectivePieLabelMode === "outside-with-lines",
+                        lineStartX: cx + Math.cos(midAngle) * (radius - 2),
+                        lineStartY: cy + Math.sin(midAngle) * (radius - 2),
+                        lineBendX: cx + Math.cos(midAngle) * (radius + (isQuad ? 7 : 10)),
+                        lineBendY: cy + Math.sin(midAngle) * (radius + (isQuad ? 7 : 10)),
+                    };
+                    if (anchor === "start") {
+                        rightLabels.push(entry);
+                    } else {
+                        leftLabels.push(entry);
                     }
-
-                    labelMarks.push(`<text x="${labelX}" y="${labelY}" text-anchor="${anchor}" dominant-baseline="middle">${escapeHtml(shortenAxisLabel(text))}</text>`);
                 }
                 angle = nextAngle;
                 return `<path d="M ${cx} ${cy} L ${x1} ${y1} A ${radius} ${radius} 0 ${largeArc} 1 ${x2} ${y2} Z" fill="${escapeHtml(color)}"></path>`;
             })
             .join("");
 
+        if (!compact && effectivePieLabelMode !== "hidden") {
+            const minY = isQuad ? (isSideLegend ? 18 : 12) : 16;
+            const maxY = isQuad ? (isSideLegend ? height - 52 : height - 12) : height - 18;
+            [leftLabels, rightLabels].forEach((items) => {
+                distributePieLabels(items, isQuad ? (isSideLegend ? 12 : 10) : 14, minY, maxY).forEach((item) => {
+                    const edgePadding = isQuad ? 8 : 12;
+                    const minX = item.anchor === "start" ? edgePadding : item.textWidth + edgePadding;
+                    const maxX = item.anchor === "start" ? width - item.textWidth - edgePadding : width - edgePadding;
+                    const manualOffset = labelOffsets.get(item.sectorIndex);
+                    const currentX = clamp(item.x + width * ((manualOffset?.dx || 0) / 100), minX, maxX);
+                    const currentY = clamp(item.y + height * ((manualOffset?.dy || 0) / 100), minY, maxY);
+                    const dragAttrs = `data-analysis-action="drag-pie-sector-label" data-chart-index="${escapeHtml(String(chartIndex))}" data-sector-index="${escapeHtml(String(item.sectorIndex))}" data-anchor="${escapeHtml(item.anchor)}" data-base-x="${escapeHtml(String(item.x))}" data-base-y="${escapeHtml(String(item.y))}" data-edge-padding="${escapeHtml(String(edgePadding))}" data-text-width="${escapeHtml(String(item.textWidth))}" data-text-height="${escapeHtml(String(item.textHeight))}" data-min-x="${escapeHtml(String(minX))}" data-max-x="${escapeHtml(String(maxX))}" data-min-y="${escapeHtml(String(minY))}" data-max-y="${escapeHtml(String(maxY))}"`;
+                    if (item.withLine) {
+                        const lineEndX = currentX + (item.anchor === "start" ? (isQuad ? -4 : -6) : (isQuad ? 4 : 6));
+                        labelMarks.push(`
+                            <g class="analysis-pie-sector-label-group" data-analysis-pie-sector-label-group="true" data-chart-index="${escapeHtml(String(chartIndex))}" data-sector-index="${escapeHtml(String(item.sectorIndex))}" data-anchor="${escapeHtml(item.anchor)}">
+                                <polyline class="analysis-pie-sector-label-line" points="${item.lineStartX},${item.lineStartY} ${item.lineBendX},${item.lineBendY} ${lineEndX},${currentY}" fill="none" stroke="#9b8a75" stroke-width="1"></polyline>
+                                <text class="analysis-pie-sector-label" x="${currentX}" y="${currentY}" text-anchor="${item.anchor}" dominant-baseline="middle" ${dragAttrs}>${escapeHtml(item.text)}</text>
+                            </g>
+                        `);
+                        return;
+                    }
+                    labelMarks.push(`
+                        <g class="analysis-pie-sector-label-group" data-analysis-pie-sector-label-group="true" data-chart-index="${escapeHtml(String(chartIndex))}" data-sector-index="${escapeHtml(String(item.sectorIndex))}" data-anchor="${escapeHtml(item.anchor)}">
+                            <text class="analysis-pie-sector-label" x="${currentX}" y="${currentY}" text-anchor="${item.anchor}" dominant-baseline="middle" ${dragAttrs}>${escapeHtml(item.text)}</text>
+                        </g>
+                    `);
+                });
+            });
+        }
+
         return `
             <svg viewBox="0 0 ${width} ${height}" class="analysis-chart-svg" aria-label="Круговая диаграмма">
                 ${slices}
-                <circle cx="${cx}" cy="${cy}" r="24" fill="#fffaf2"></circle>
-                <text x="${cx}" y="${cy + 4}" text-anchor="middle">${escapeHtml(formatPreviewNumber(total))}</text>
+                <circle cx="${cx}" cy="${cy}" r="${compact ? 18 : (isQuad ? 20 : 24)}" fill="#fffaf2"></circle>
+                ${centerText ? `<text x="${cx}" y="${cy + 4}" text-anchor="middle">${escapeHtml(centerText)}</text>` : ""}
                 ${labelMarks.join("")}
             </svg>
         `;
@@ -427,13 +715,18 @@
         return String(value || "Без группы");
     }
 
-    function getLegendItems(preview, chart) {
+    function getLegendItems(preview, chart, options = {}) {
         if (chart.chart_type === "pie") {
             const categories = preview.categories || [];
             const values = preview.series?.[0]?.values || [];
+            const compact = Boolean(options.compact);
+            const total = values.reduce((sum, value) => sum + Number(value || 0), 0);
+            const pieValueMode = chart?.pie_value_mode || "value";
             return categories.map((category, index) => ({
                 color: pickPreviewColor(index, chart.color || "#b7791f"),
-                label: `${category}: ${formatPreviewNumber(values[index] || 0)}`,
+                label: compact
+                    ? `${shortenAxisLabel(category, 10)}: ${buildPieValueText(values[index] || 0, total, pieValueMode, true)}`
+                    : `${category}: ${buildPieValueText(values[index] || 0, total, pieValueMode, false)}`,
             }));
         }
 
@@ -489,10 +782,13 @@
         `;
     }
 
-    function buildChartPreviewMarkup(preview, chart) {
+    function buildChartPreviewMarkup(preview, chart, options = {}) {
         const current = preview || { state: "idle", message: "Подготовьте конфигурацию графика." };
+        const renderOptions = getChartRenderOptions(options, chart);
         const summary = current.summary || {};
-        const warningMarkup = (current.warnings || [])
+        const warningMarkup = renderOptions.hideWarnings
+            ? ""
+            : (current.warnings || [])
             .map((warning) => `<div class="analysis-chart-warning">${escapeHtml(warning)}</div>`)
             .join("");
 
@@ -507,21 +803,25 @@
 
         let visualizationMarkup = "";
         if (chart.chart_type === "bar") {
-            visualizationMarkup = buildBarChartSvg(current);
+            visualizationMarkup = buildBarChartSvg(current, renderOptions);
         } else if (chart.chart_type === "line") {
-            visualizationMarkup = buildLineChartSvg(current);
+            visualizationMarkup = buildLineChartSvg(current, renderOptions);
         } else if (chart.chart_type === "pie") {
-            visualizationMarkup = buildPieChartSvg(current, chart);
+            visualizationMarkup = buildPieChartSvg(current, chart, renderOptions);
         } else {
             visualizationMarkup = buildAggregationTableMarkup(current);
         }
-        const legendPosition = chart.legend_position || "right";
-        const legendItems = getLegendItems(current, chart);
-        const effectiveLegendPosition = chart.chart_type === "pie" && chart.pie_label_mode !== "legend" ? "hidden" : legendPosition;
+        const legendItems = getLegendItems(current, chart, renderOptions);
+        const effectivePieLabelMode = chart.chart_type === "pie"
+            ? getEffectivePieLabelMode(current, chart, renderOptions)
+            : "hidden";
+        const effectiveLegendPosition = renderOptions.legendPosition;
         const legendMarkup = buildLegendMarkup(legendItems, effectiveLegendPosition);
         const isInsideLegend = effectiveLegendPosition === "inside-top-right" || effectiveLegendPosition === "inside-top-left";
+        const isLeftLegend = effectiveLegendPosition === "left";
         const isRightLegend = effectiveLegendPosition === "right";
         const isBottomLegend = effectiveLegendPosition === "bottom";
+        const sideLegendClass = isLeftLegend ? "has-side-legend has-side-legend-left" : isRightLegend ? "has-side-legend has-side-legend-right" : "";
 
         const annotationsMarkup = (chart.annotations || [])
             .map(
@@ -539,12 +839,14 @@
             .join("");
 
         return `
-            <div class="analysis-chart-preview is-ready">
+            <div class="analysis-chart-preview is-ready ${renderOptions.compact ? "is-compact" : ""}">
+                ${renderOptions.hideHead ? "" : `
                 <div class="analysis-chart-preview-head">
                     <strong>${escapeHtml(chart.legend || "Предпросмотр графика")}</strong>
                     <span>${escapeHtml((summary.aggregation || chart.agg_func || "count").toUpperCase())}</span>
-                </div>
-                <div class="analysis-chart-preview-body ${isRightLegend ? "has-side-legend" : ""}">
+                </div>`}
+                <div class="analysis-chart-preview-body ${sideLegendClass}">
+                    ${isLeftLegend ? legendMarkup : ""}
                     <div class="analysis-chart-canvas" data-chart-index="${escapeHtml(String(chart.position ?? 0))}">
                         <div class="analysis-chart-visual">${visualizationMarkup}</div>
                         ${isInsideLegend ? legendMarkup : ""}
@@ -553,18 +855,20 @@
                     ${isRightLegend ? legendMarkup : ""}
                 </div>
                 ${isBottomLegend ? legendMarkup : ""}
-                <div class="analysis-chart-preview-meta">Точек: ${escapeHtml(String(summary.points || 0))}${summary.skipped_rows ? ` • Пропущено строк: ${escapeHtml(String(summary.skipped_rows))}` : ""}</div>
+                ${renderOptions.hideMeta ? "" : `<div class="analysis-chart-preview-meta">Точек: ${escapeHtml(String(summary.points || 0))}${summary.skipped_rows ? ` • Пропущено строк: ${escapeHtml(String(summary.skipped_rows))}` : ""}</div>`}
                 ${warningMarkup}
             </div>
         `;
     }
 
-    function buildSheetCardMarkup(chart, preview, index) {
+    function buildSheetCardMarkup(chart, preview, index, options = {}) {
+        const layoutMode = options.layoutMode || "sheet";
+        const isPair = layoutMode === "pair";
+        const isQuad = layoutMode === "quad";
         const title = escapeHtml(getChartDisplayTitle(chart, index));
         const compatibility = getChartCompatibility(chart);
-        const hasComment = Boolean(String(chart.comment_title || "").trim() || String(chart.comment_text || "").trim());
         return `
-            <article class="analysis-sheet-card ${compatibility.ok ? "" : "is-incompatible"}">
+            <article class="analysis-sheet-card ${isPair ? "is-pair-card" : ""} ${isQuad ? "is-quad-card" : ""} ${compatibility.ok ? "" : "is-incompatible"}">
                 <div class="analysis-sheet-card-head">
                     <div>
                         <h4>${title}</h4>
@@ -572,9 +876,10 @@
                     </div>
                     <span class="analysis-sheet-card-status ${compatibility.ok ? "" : "warning"}">${compatibility.ok ? "Готов" : "Нужна настройка"}</span>
                 </div>
-                <div class="analysis-sheet-card-body ${hasComment ? "has-comment" : ""}">
-                    ${buildChartPreviewMarkup(preview, chart)}
-                    ${hasComment ? buildChartCommentMarkup(chart) : ""}
+                <div class="analysis-sheet-card-body">
+                    ${buildChartPreviewMarkup(preview, chart, (isPair || isQuad)
+                        ? { layoutMode, hideWarnings: true, hideHead: true, hideMeta: true }
+                        : { layoutMode, compact: true, hideWarnings: true, hideHead: true, hideMeta: true })}
                 </div>
             </article>
         `;
@@ -628,13 +933,14 @@
             .analysis-chart-preview-head, .analysis-chart-preview-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; }
             .analysis-chart-preview-head strong { font-size: 13px; }
             .analysis-chart-preview-head span, .analysis-chart-preview-meta, .report-meta { color: #6f6458; }
-            .analysis-chart-preview-body.has-side-legend { display: grid; grid-template-columns: minmax(0, 1fr) minmax(150px, 180px); gap: 10px; align-items: start; }
+            .analysis-chart-preview-body.has-side-legend { display: grid; grid-template-columns: minmax(150px, 180px) minmax(0, 1fr); gap: 10px; align-items: start; }
+            .analysis-chart-preview-body.has-side-legend-right { grid-template-columns: minmax(0, 1fr) minmax(150px, 180px); }
             .analysis-chart-canvas { position: relative; min-height: 180px; }
             .analysis-chart-svg { width: 100%; height: auto; display: block; }
             .analysis-chart-svg text { fill: #6f6458; font-size: 10px; font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif; }
             .analysis-chart-legend { display: flex; flex-wrap: wrap; gap: 8px 12px; margin-top: 8px; }
-            .analysis-chart-legend-right, .analysis-chart-legend-bottom, .analysis-chart-legend-inside-top-right, .analysis-chart-legend-inside-top-left { padding: 8px 10px; border-radius: 10px; background: rgba(255, 250, 242, 0.94); border: 1px solid rgba(74, 56, 38, 0.12); }
-            .analysis-chart-legend-right { flex-direction: column; align-items: flex-start; margin-top: 0; }
+            .analysis-chart-legend-left, .analysis-chart-legend-right, .analysis-chart-legend-bottom, .analysis-chart-legend-inside-top-right, .analysis-chart-legend-inside-top-left { padding: 8px 10px; border-radius: 10px; background: rgba(255, 250, 242, 0.94); border: 1px solid rgba(74, 56, 38, 0.12); }
+            .analysis-chart-legend-left, .analysis-chart-legend-right { flex-direction: column; align-items: flex-start; margin-top: 0; }
             .analysis-chart-legend-bottom { margin-top: 10px; }
             .analysis-chart-legend-inside-top-right, .analysis-chart-legend-inside-top-left { position: absolute; top: 8px; max-width: 44%; z-index: 2; }
             .analysis-chart-legend-inside-top-right { right: 8px; }
@@ -857,6 +1163,9 @@
             legend: chart.legend,
             legend_position: chart.legend_position,
             pie_label_mode: chart.pie_label_mode,
+            pie_value_mode: chart.pie_value_mode,
+            pie_center_mode: chart.pie_center_mode,
+            pie_sector_label_mode: chart.pie_sector_label_mode,
             labels: chart.labels,
             comment_title: chart.comment_title,
             comment_text: chart.comment_text,
@@ -866,6 +1175,7 @@
                 x: Number(annotation.x) || 0,
                 y: Number(annotation.y) || 0,
             })),
+            pie_sector_label_offsets: normalizePieSectorLabelOffsets(chart.pie_sector_label_offsets),
             is_hidden: chart.is_hidden,
             position: index,
         };
@@ -925,6 +1235,40 @@
         state.userState.draft_state = buildDraftStatePayload();
     }
 
+    function setPieSectorLabelOffset(index, sectorIndex, dx, dy) {
+        const chart = getChartAt(index);
+        if (!chart) {
+            return;
+        }
+
+        const offsets = normalizePieSectorLabelOffsets(chart.pie_sector_label_offsets);
+        const nextOffset = {
+            index: sectorIndex,
+            dx: Math.round(clamp(dx, -100, 100) * 100) / 100,
+            dy: Math.round(clamp(dy, -100, 100) * 100) / 100,
+        };
+        const existingIndex = offsets.findIndex((item) => item.index === sectorIndex);
+        if (existingIndex >= 0) {
+            offsets[existingIndex] = nextOffset;
+        } else {
+            offsets.push(nextOffset);
+        }
+        chart.pie_sector_label_offsets = offsets;
+        state.userState.draft_state = buildDraftStatePayload();
+    }
+
+    function resetPieSectorLabelOffsets(index) {
+        const chart = getChartAt(index);
+        if (!chart) {
+            return;
+        }
+
+        chart.pie_sector_label_offsets = [];
+        state.userState.draft_state = buildDraftStatePayload();
+        scheduleUserStateSave({ draft_state: state.userState.draft_state });
+        renderAll({ refreshPreviews: false });
+    }
+
     function syncAnnotationNodes(index, annotationId, x, y, text = null) {
         document.querySelectorAll(`[data-analysis-action='drag-annotation'][data-chart-index='${index}'][data-annotation-id='${annotationId}']`).forEach((node) => {
             if (x !== null && x !== undefined) {
@@ -935,6 +1279,26 @@
             }
             if (text !== null) {
                 node.textContent = text;
+            }
+        });
+    }
+
+    function syncPieSectorLabelNodes(index, sectorIndex, x, y) {
+        document.querySelectorAll(`[data-analysis-pie-sector-label-group='true'][data-chart-index='${index}'][data-sector-index='${sectorIndex}']`).forEach((group) => {
+            const textNode = group.querySelector(".analysis-pie-sector-label");
+            const lineNode = group.querySelector(".analysis-pie-sector-label-line");
+            const anchor = group.dataset.anchor || textNode?.dataset.anchor || "start";
+            if (textNode) {
+                textNode.setAttribute("x", String(x));
+                textNode.setAttribute("y", String(y));
+            }
+            if (lineNode) {
+                const points = (lineNode.getAttribute("points") || "").trim().split(/\s+/);
+                if (points.length === 3) {
+                    const lineEndX = x + (anchor === "start" ? -4 : 4);
+                    points[2] = `${lineEndX},${y}`;
+                    lineNode.setAttribute("points", points.join(" "));
+                }
             }
         });
     }
@@ -961,6 +1325,45 @@
         window.addEventListener("mouseup", stopAnnotationDrag);
     }
 
+    function startPieSectorLabelDrag(index, sectorIndex, event) {
+        if (event.button !== 0) {
+            return;
+        }
+
+        const handle = event.target.closest("[data-analysis-action='drag-pie-sector-label']");
+        const svg = handle?.closest(".analysis-chart-svg");
+        if (!handle || !svg) {
+            return;
+        }
+
+        event.preventDefault();
+        const rect = svg.getBoundingClientRect();
+        const viewBox = svg.viewBox?.baseVal;
+        if (!viewBox || !rect.width || !rect.height) {
+            return;
+        }
+
+        activePieSectorLabelDrag = {
+            chartIndex: index,
+            sectorIndex,
+            rect,
+            viewBoxWidth: viewBox.width,
+            viewBoxHeight: viewBox.height,
+            baseX: Number(handle.dataset.baseX) || 0,
+            baseY: Number(handle.dataset.baseY) || 0,
+            anchor: handle.dataset.anchor || "start",
+            textWidth: Number(handle.dataset.textWidth) || 56,
+            textHeight: Number(handle.dataset.textHeight) || 12,
+            edgePadding: Number(handle.dataset.edgePadding) || 8,
+            minX: Number(handle.dataset.minX),
+            maxX: Number(handle.dataset.maxX),
+            minY: Number(handle.dataset.minY),
+            maxY: Number(handle.dataset.maxY),
+        };
+        window.addEventListener("mousemove", handlePieSectorLabelDrag);
+        window.addEventListener("mouseup", stopPieSectorLabelDrag);
+    }
+
     function handleAnnotationDrag(event) {
         if (!activeAnnotationDrag) {
             return;
@@ -971,6 +1374,42 @@
         const y = ((event.clientY - rect.top) / Math.max(rect.height, 1)) * 100;
         setAnnotationPosition(chartIndex, annotationId, x, y);
         syncAnnotationNodes(chartIndex, annotationId, clamp(x, 0, 92), clamp(y, 0, 92));
+    }
+
+    function handlePieSectorLabelDrag(event) {
+        if (!activePieSectorLabelDrag) {
+            return;
+        }
+
+        const {
+            chartIndex,
+            sectorIndex,
+            rect,
+            viewBoxWidth,
+            viewBoxHeight,
+            baseX,
+            baseY,
+            anchor,
+            textWidth,
+            textHeight,
+            edgePadding,
+            minX,
+            maxX,
+            minY,
+            maxY,
+        } = activePieSectorLabelDrag;
+        const rawX = ((event.clientX - rect.left) / Math.max(rect.width, 1)) * viewBoxWidth;
+        const rawY = ((event.clientY - rect.top) / Math.max(rect.height, 1)) * viewBoxHeight;
+        const clampedMinX = Number.isFinite(minX) ? minX : (anchor === "start" ? edgePadding : textWidth + edgePadding);
+        const clampedMaxX = Number.isFinite(maxX) ? maxX : (anchor === "start" ? viewBoxWidth - textWidth - edgePadding : viewBoxWidth - edgePadding);
+        const clampedMinY = Number.isFinite(minY) ? minY : textHeight;
+        const clampedMaxY = Number.isFinite(maxY) ? maxY : (viewBoxHeight - edgePadding);
+        const x = clamp(rawX, clampedMinX, clampedMaxX);
+        const y = clamp(rawY, clampedMinY, clampedMaxY);
+        const dx = ((x - baseX) / Math.max(viewBoxWidth, 1)) * 100;
+        const dy = ((y - baseY) / Math.max(viewBoxHeight, 1)) * 100;
+        setPieSectorLabelOffset(chartIndex, sectorIndex, dx, dy);
+        syncPieSectorLabelNodes(chartIndex, sectorIndex, x, y);
     }
 
     function stopAnnotationDrag() {
@@ -984,6 +1423,17 @@
         window.removeEventListener("mouseup", stopAnnotationDrag);
     }
 
+    function stopPieSectorLabelDrag() {
+        if (!activePieSectorLabelDrag) {
+            return;
+        }
+
+        activePieSectorLabelDrag = null;
+        scheduleUserStateSave({ draft_state: state.userState.draft_state });
+        window.removeEventListener("mousemove", handlePieSectorLabelDrag);
+        window.removeEventListener("mouseup", stopPieSectorLabelDrag);
+    }
+
     function buildDraftStatePayload() {
         if (!state.draft.selectedTypeId) {
             return null;
@@ -995,10 +1445,75 @@
         };
     }
 
+    function queueUserStateSavePatch(patch) {
+        if (!patch || typeof patch !== "object") {
+            return;
+        }
+
+        pendingUserStatePatch = {
+            ...(pendingUserStatePatch || {}),
+            ...patch,
+        };
+    }
+
+    function handleUserStateSaveError(error) {
+        const message = error?.error || "Не удалось автоматически сохранить состояние вкладки Анализ.";
+        setMessage(message, "warning");
+    }
+
+    async function flushUserStateSave(options = {}) {
+        const keepalive = options.keepalive === true;
+        window.clearTimeout(userStateSaveTimer);
+        userStateSaveTimer = null;
+
+        if (activeUserStateSavePromise) {
+            await activeUserStateSavePromise;
+        }
+
+        if (!pendingUserStatePatch || !Object.keys(pendingUserStatePatch).length) {
+            return null;
+        }
+
+        const patch = pendingUserStatePatch;
+        pendingUserStatePatch = null;
+
+        const request = apiJson("/api/analysis/state", {
+            method: "PUT",
+            keepalive,
+            body: JSON.stringify(patch),
+        });
+
+        activeUserStateSavePromise = request;
+
+        let response;
+        try {
+            response = await request;
+            state.userState = { ...defaultUserState, ...(response.user_state || state.userState) };
+            applyPersistedAnalysisUiState();
+        } catch (error) {
+            pendingUserStatePatch = {
+                ...patch,
+                ...(pendingUserStatePatch || {}),
+            };
+            throw error;
+        } finally {
+            if (activeUserStateSavePromise === request) {
+                activeUserStateSavePromise = null;
+            }
+        }
+
+        if (pendingUserStatePatch && !keepalive) {
+            return flushUserStateSave(options);
+        }
+
+        return response;
+    }
+
     function scheduleUserStateSave(patch, delay = 180) {
+        queueUserStateSavePatch(patch);
         window.clearTimeout(userStateSaveTimer);
         userStateSaveTimer = window.setTimeout(() => {
-            void saveUserState(patch);
+            void flushUserStateSave().catch(handleUserStateSaveError);
         }, delay);
     }
 
@@ -1024,12 +1539,29 @@
     }
 
     function renderViewMode() {
+        const isPresentationView = state.viewMode === "sheet" || state.viewMode === "pair" || state.viewMode === "quad";
         const isSheet = state.viewMode === "sheet";
-        elements.shell?.classList.toggle("analysis-presentation-mode", isSheet);
-        elements.mainView?.classList.toggle("hidden", isSheet);
-        elements.sheetView?.classList.toggle("hidden", !isSheet);
-        elements.editorViewButton?.classList.toggle("active", !isSheet);
+        const isPair = state.viewMode === "pair";
+        const isQuad = state.viewMode === "quad";
+        elements.shell?.classList.toggle("analysis-presentation-mode", isPresentationView);
+        elements.mainView?.classList.toggle("hidden", isPresentationView);
+        elements.sheetView?.classList.toggle("hidden", !isPresentationView);
+        elements.sheetView?.setAttribute("data-layout", isPair ? "pair" : isQuad ? "quad" : "sheet");
+        elements.sheetGrid?.setAttribute("data-layout", isPair ? "pair" : isQuad ? "quad" : "sheet");
+        elements.editorViewButton?.classList.toggle("active", state.viewMode === "editor");
         elements.sheetViewButton?.classList.toggle("active", isSheet);
+        elements.pairViewButton?.classList.toggle("active", isPair);
+        elements.quadViewButton?.classList.toggle("active", isQuad);
+        if (elements.sheetTitle) {
+            elements.sheetTitle.textContent = isPair ? "Лист 1*1" : isQuad ? "Лист 4" : "Лист 2x2";
+        }
+        if (elements.sheetDescription) {
+            elements.sheetDescription.textContent = isPair
+                ? "Отдельный экран для одновременного просмотра двух графиков слева и справа."
+                : isQuad
+                    ? "Экран из четырех секторов: до четырех графиков одновременно по правилам расширенного рендера, близким к Листу 1*1."
+                    : "Отдельный экран для одновременного просмотра до четырех графиков.";
+        }
         updateSheetViewportLayout();
     }
 
@@ -1038,17 +1570,33 @@
             return;
         }
 
-        if (state.viewMode !== "sheet") {
+        if (state.viewMode !== "sheet" && state.viewMode !== "pair" && state.viewMode !== "quad") {
             elements.sheetView.style.removeProperty("height");
             elements.sheetView.style.removeProperty("max-height");
+            elements.sheetView.style.removeProperty("--analysis-sheet-grid-height");
+            elements.sheetView.style.removeProperty("--analysis-sheet-row-height");
             return;
         }
 
-        const rect = elements.sheetView.getBoundingClientRect();
+        const viewRect = elements.sheetView.getBoundingClientRect();
         const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
-        const availableHeight = Math.max(360, Math.floor(viewportHeight - rect.top - 16));
+        const availableHeight = Math.max(360, Math.floor(viewportHeight - viewRect.top - 16));
         elements.sheetView.style.height = `${availableHeight}px`;
         elements.sheetView.style.maxHeight = `${availableHeight}px`;
+
+        const headHeight = elements.sheetView.querySelector(".analysis-sheet-head")?.offsetHeight || 0;
+        const computedStyle = window.getComputedStyle(elements.sheetView);
+        const gapValue = Number.parseFloat(computedStyle.rowGap || computedStyle.gap || "0") || 0;
+        const gridHeight = Math.max(220, Math.floor(availableHeight - headHeight - gapValue));
+        const gridGap = Number.parseFloat(window.getComputedStyle(elements.sheetGrid || elements.sheetView).gap || "0") || 0;
+        const rowHeight = state.viewMode === "pair"
+            ? Math.max(220, gridHeight)
+            : state.viewMode === "quad"
+                ? Math.max(180, Math.floor((gridHeight - gridGap) / 2))
+                : Math.max(140, Math.floor((gridHeight - gridGap) / 2));
+
+        elements.sheetView.style.setProperty("--analysis-sheet-grid-height", `${gridHeight}px`);
+        elements.sheetView.style.setProperty("--analysis-sheet-row-height", `${rowHeight}px`);
     }
 
     function scheduleSheetViewportLayout() {
@@ -1067,9 +1615,16 @@
             return;
         }
 
-        const cards = state.draft.charts.slice(0, 4);
+        const isPair = state.viewMode === "pair";
+        const isQuad = state.viewMode === "quad";
+        const maxCards = isPair ? 2 : 4;
+        const cards = state.draft.charts.slice(0, maxCards);
         if (!cards.length) {
-            elements.sheetGrid.innerHTML = '<div class="analysis-sheet-empty">Добавьте до четырех графиков, чтобы увидеть общий лист 2x2.</div>';
+            elements.sheetGrid.innerHTML = `<div class="analysis-sheet-empty">${isPair
+                ? "Добавьте до двух графиков, чтобы увидеть экран 1*1 с двумя карточками слева и справа."
+                : isQuad
+                    ? "Добавьте до четырех графиков, чтобы увидеть экран Лист 4 с четырьмя секторами и расширенным рендером."
+                    : "Добавьте до четырех графиков, чтобы увидеть общий лист 2x2."}</div>`;
             scheduleSheetViewportLayout();
             return;
         }
@@ -1091,11 +1646,11 @@
                 `);
                 return;
             }
-            markup.push(buildSheetCardMarkup(chart, preview, index));
+            markup.push(buildSheetCardMarkup(chart, preview, index, { layoutMode: state.viewMode }));
         });
 
-        while (markup.length < 4) {
-            markup.push('<div class="analysis-sheet-placeholder">Свободное место для графика</div>');
+        while (markup.length < maxCards) {
+            markup.push(`<div class="analysis-sheet-placeholder">${isPair ? "Свободное место для графика" : "Свободное место для графика"}</div>`);
         }
 
         elements.sheetGrid.innerHTML = markup.join("");
@@ -1148,6 +1703,7 @@
                 const hasComment = Boolean(String(chart.comment_title || "").trim() || String(chart.comment_text || "").trim());
                 const paramsCollapsed = Boolean(chart.ui_collapsed);
                 const annotations = chart.annotations || [];
+                const pieLabelOffsets = normalizePieSectorLabelOffsets(chart.pie_sector_label_offsets);
                 return `
                     <article class="chart-card ${chart.is_hidden ? "is-hidden" : ""} ${compatibility.ok ? "" : "is-incompatible"}" id="chart_card_${chartNumber}" data-chart-index="${index}">
                         <div class="chart-card-head">
@@ -1161,6 +1717,7 @@
                                 <button type="button" class="secondary-button small-button" data-analysis-action="print-chart" data-chart-index="${index}">Печать</button>
                                 <button type="button" class="secondary-button small-button" data-analysis-action="export-table" data-chart-index="${index}">XLSX</button>
                                 <button type="button" class="secondary-button small-button" data-analysis-action="add-annotation" data-chart-index="${index}">Добавить надпись</button>
+                                ${chart.chart_type === "pie" ? `<button type="button" class="secondary-button small-button" data-analysis-action="reset-pie-sector-labels" data-chart-index="${index}" ${pieLabelOffsets.length ? "" : "disabled"}>Сбросить подписи pie</button>` : ""}
                                 <button type="button" class="secondary-button small-button" data-analysis-action="toggle-params" data-chart-index="${index}">${paramsCollapsed ? "Показать параметры" : "Свернуть параметры"}</button>
                                 <button type="button" class="secondary-button small-button" data-analysis-action="move-up" data-chart-index="${index}" ${index === 0 ? "disabled" : ""}>↑</button>
                                 <button type="button" class="secondary-button small-button" data-analysis-action="move-down" data-chart-index="${index}" ${index === state.draft.charts.length - 1 ? "disabled" : ""}>↓</button>
@@ -1222,6 +1779,7 @@
                                 <span>Положение легенды</span>
                                 <select id="select_legend_position_${chartNumber}" data-analysis-field="legend_position" data-chart-index="${index}">
                                     <option value="right" ${chart.legend_position === "right" ? "selected" : ""}>справа</option>
+                                    <option value="left" ${chart.legend_position === "left" ? "selected" : ""}>слева</option>
                                     <option value="bottom" ${chart.legend_position === "bottom" ? "selected" : ""}>снизу</option>
                                     <option value="inside-top-right" ${chart.legend_position === "inside-top-right" ? "selected" : ""}>внутри справа сверху</option>
                                     <option value="inside-top-left" ${chart.legend_position === "inside-top-left" ? "selected" : ""}>внутри слева сверху</option>
@@ -1229,11 +1787,38 @@
                                 </select>
                             </label>
                             <label>
-                                <span>Режим подписей pie</span>
+                                <span>Подписи секторов pie</span>
                                 <select id="select_pie_label_mode_${chartNumber}" data-analysis-field="pie_label_mode" data-chart-index="${index}">
-                                    <option value="legend" ${chart.pie_label_mode === "legend" ? "selected" : ""}>обычная легенда</option>
+                                    <option value="legend" ${chart.pie_label_mode === "legend" ? "selected" : ""}>без подписей у секторов</option>
                                     <option value="outside" ${chart.pie_label_mode === "outside" ? "selected" : ""}>рядом с секторами</option>
                                     <option value="outside-with-lines" ${chart.pie_label_mode === "outside-with-lines" ? "selected" : ""}>рядом с секторами + линии</option>
+                                </select>
+                            </label>
+                            <label>
+                                <span>Значения pie</span>
+                                <select id="select_pie_value_mode_${chartNumber}" data-analysis-field="pie_value_mode" data-chart-index="${index}">
+                                    <option value="value" ${chart.pie_value_mode === "value" ? "selected" : ""}>значение</option>
+                                    <option value="percent" ${chart.pie_value_mode === "percent" ? "selected" : ""}>доля, %</option>
+                                    <option value="value-percent" ${chart.pie_value_mode === "value-percent" ? "selected" : ""}>значение + доля, %</option>
+                                </select>
+                            </label>
+                            <label>
+                                <span>Центр pie</span>
+                                <select id="select_pie_center_mode_${chartNumber}" data-analysis-field="pie_center_mode" data-chart-index="${index}">
+                                    <option value="total" ${chart.pie_center_mode === "total" ? "selected" : ""}>сумма</option>
+                                    <option value="hidden" ${chart.pie_center_mode === "hidden" ? "selected" : ""}>скрыть</option>
+                                </select>
+                            </label>
+                            <label>
+                                <span>Подпись сектора pie</span>
+                                <select id="select_pie_sector_label_mode_${chartNumber}" data-analysis-field="pie_sector_label_mode" data-chart-index="${index}">
+                                    <option value="name" ${chart.pie_sector_label_mode === "name" ? "selected" : ""}>только название</option>
+                                    <option value="value" ${chart.pie_sector_label_mode === "value" ? "selected" : ""}>только значение</option>
+                                    <option value="percent" ${chart.pie_sector_label_mode === "percent" ? "selected" : ""}>только доля, %</option>
+                                    <option value="value-percent" ${chart.pie_sector_label_mode === "value-percent" ? "selected" : ""}>значение + доля, %</option>
+                                    <option value="name-value" ${chart.pie_sector_label_mode === "name-value" ? "selected" : ""}>название + значение</option>
+                                    <option value="name-percent" ${chart.pie_sector_label_mode === "name-percent" ? "selected" : ""}>название + доля, %</option>
+                                    <option value="name-value-percent" ${chart.pie_sector_label_mode === "name-value-percent" ? "selected" : ""}>название + значение + доля, %</option>
                                 </select>
                             </label>
                             <label class="chart-card-wide">
@@ -1275,6 +1860,15 @@
                                         : '<div class="annotation-editor-empty">Добавьте надпись, затем перетащите ее мышью по графику.</div>'}
                                 </div>
                             </div>
+                            ${chart.chart_type === "pie" ? `
+                                <div class="chart-card-wide annotation-editor pie-label-editor">
+                                    <div class="annotation-editor-head">
+                                        <span>Подписи секторов pie</span>
+                                        <strong>${pieLabelOffsets.length}</strong>
+                                    </div>
+                                    <div class="annotation-editor-empty">Подписи секторов можно перетаскивать прямо по графику. Они сохраняются и остаются внутри рамки SVG.</div>
+                                </div>
+                            ` : ""}
                         </div>
                         ${buildChartPreviewMarkup(preview, chart)}
                         ${hasComment ? `<div class="chart-card-comment-preview">${buildChartCommentMarkup(chart)}</div>` : ""}
@@ -1424,6 +2018,8 @@
 
         activeTableResize = null;
         persistAnalysisUiPreferences();
+        state.userState.table_column_widths = { ...state.table.columnWidths };
+        scheduleUserStateSave({ table_column_widths: state.userState.table_column_widths });
         window.removeEventListener("mousemove", handleTableColumnResize);
         window.removeEventListener("mouseup", stopTableColumnResize);
     }
@@ -1502,6 +2098,7 @@
             state.types = payload.types || [];
             state.userState = { ...defaultUserState, ...(payload.user_state || {}) };
             state.dataset = payload.dataset || emptyDataset();
+            applyPersistedAnalysisUiState();
             applyBackendAnalysisWidth();
             syncDraftFromSelection();
             state.table.search = state.userState.table_search || "";
@@ -1523,13 +2120,8 @@
     }
 
     async function saveUserState(patch) {
-        const payload = { ...patch };
-        const response = await apiJson("/api/analysis/state", {
-            method: "PUT",
-            body: JSON.stringify(payload),
-        });
-        state.userState = { ...defaultUserState, ...(response.user_state || state.userState) };
-        return response;
+        queueUserStateSavePatch(patch);
+        return flushUserStateSave();
     }
 
     async function useFactsDataset() {
@@ -1745,12 +2337,32 @@
         elements.addChartButton.addEventListener("click", addChart);
         elements.editorViewButton?.addEventListener("click", () => {
             state.viewMode = "editor";
+            state.userState.view_mode = state.viewMode;
             persistAnalysisUiPreferences();
+            void saveUserState({ view_mode: state.viewMode }).catch(handleUserStateSaveError);
             renderViewMode();
         });
         elements.sheetViewButton?.addEventListener("click", () => {
             state.viewMode = "sheet";
+            state.userState.view_mode = state.viewMode;
             persistAnalysisUiPreferences();
+            void saveUserState({ view_mode: state.viewMode }).catch(handleUserStateSaveError);
+            renderViewMode();
+            renderSheetView();
+        });
+        elements.pairViewButton?.addEventListener("click", () => {
+            state.viewMode = "pair";
+            state.userState.view_mode = state.viewMode;
+            persistAnalysisUiPreferences();
+            void saveUserState({ view_mode: state.viewMode }).catch(handleUserStateSaveError);
+            renderViewMode();
+            renderSheetView();
+        });
+        elements.quadViewButton?.addEventListener("click", () => {
+            state.viewMode = "quad";
+            state.userState.view_mode = state.viewMode;
+            persistAnalysisUiPreferences();
+            void saveUserState({ view_mode: state.viewMode }).catch(handleUserStateSaveError);
             renderViewMode();
             renderSheetView();
         });
@@ -1830,6 +2442,10 @@
                 addAnnotation(index);
                 return;
             }
+            if (action === "reset-pie-sector-labels") {
+                resetPieSectorLabelOffsets(index);
+                return;
+            }
             if (action === "print-chart") {
                 printChartPreview(index);
                 return;
@@ -1895,6 +2511,11 @@
             scheduleUserStateSave({ draft_state: state.userState.draft_state });
         });
         elements.shell.addEventListener("mousedown", (event) => {
+            const pieLabelHandle = event.target.closest("[data-analysis-action='drag-pie-sector-label']");
+            if (pieLabelHandle) {
+                startPieSectorLabelDrag(Number(pieLabelHandle.dataset.chartIndex), Number(pieLabelHandle.dataset.sectorIndex), event);
+                return;
+            }
             const handle = event.target.closest("[data-analysis-action='drag-annotation']");
             if (!handle) {
                 return;
@@ -1906,8 +2527,14 @@
             const width = Number(event.detail?.width || 260);
             window.clearTimeout(widthSaveTimer);
             widthSaveTimer = window.setTimeout(() => {
-                void saveUserState({ left_panel_width: width });
+                void saveUserState({ left_panel_width: width }).catch(handleUserStateSaveError);
             }, 250);
+        });
+        document.addEventListener("visibilitychange", () => {
+            if (document.visibilityState !== "hidden") {
+                return;
+            }
+            void flushUserStateSave({ keepalive: true }).catch(() => {});
         });
     }
 

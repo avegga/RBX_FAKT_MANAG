@@ -183,6 +183,8 @@
                         <div class="analysis-view-switch" role="tablist" aria-label="Режим просмотра анализа">
                             <button type="button" id="btn_analysis_editor_view" class="secondary-button active" data-analysis-view="editor">Редактор</button>
                             <button type="button" id="btn_analysis_sheet_view" class="secondary-button" data-analysis-view="sheet">Лист 2x2</button>
+                            <button type="button" id="btn_analysis_pair_view" class="secondary-button" data-analysis-view="pair">Лист 1*1</button>
+                            <button type="button" id="btn_analysis_quad_view" class="secondary-button" data-analysis-view="quad">Лист 4</button>
                         </div>
                         <button type="button" id="btn_create_analysis_type" class="secondary-button">Создать</button>
                         <button type="button" id="btn_delete_analysis_type" class="secondary-button">Удалить</button>
@@ -239,8 +241,8 @@
                     <section id="analysis-sheet-view" class="analysis-sheet-view hidden">
                         <div class="analysis-sheet-head">
                             <div>
-                                <h3>Лист 2x2</h3>
-                                <p>Отдельный экран для одновременного просмотра до четырех графиков.</p>
+                                <h3 id="analysis-sheet-title">Лист 2x2</h3>
+                                <p id="analysis-sheet-description">Отдельный экран для одновременного просмотра до четырех графиков.</p>
                             </div>
                         </div>
                         <div id="analysis-sheet-grid" class="analysis-sheet-grid"></div>

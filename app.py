@@ -26,8 +26,11 @@ COLUMN_TYPE_LABELS = {
 ALLOWED_ANALYSIS_CHART_TYPES = {"bar", "line", "pie", "table"}
 ALLOWED_ANALYSIS_SOURCES = {"none", "facts", "file"}
 ALLOWED_ANALYSIS_AGG_FUNCS = {"count", "sum", "avg", "min", "max"}
-ALLOWED_ANALYSIS_LEGEND_POSITIONS = {"right", "bottom", "inside-top-right", "inside-top-left", "hidden"}
+ALLOWED_ANALYSIS_LEGEND_POSITIONS = {"right", "left", "bottom", "inside-top-right", "inside-top-left", "hidden"}
 ALLOWED_ANALYSIS_PIE_LABEL_MODES = {"legend", "outside", "outside-with-lines"}
+ALLOWED_ANALYSIS_PIE_VALUE_MODES = {"value", "percent", "value-percent"}
+ALLOWED_ANALYSIS_PIE_CENTER_MODES = {"total", "hidden"}
+ALLOWED_ANALYSIS_PIE_SECTOR_LABEL_MODES = {"name", "value", "percent", "value-percent", "name-value", "name-percent", "name-value-percent"}
 DEFAULT_STATE = {
     "left_panel_width": 280,
     "right_panel_visible": True,
@@ -40,9 +43,11 @@ DEFAULT_ANALYSIS_USER_STATE = {
     "selected_analysis_type_id": None,
     "left_panel_width": 260,
     "visual_source_kind": "none",
+    "view_mode": "editor",
     "table_search": "",
     "table_sort_column": "",
     "table_sort_direction": "asc",
+    "table_column_widths": {},
     "draft_state": None,
 }
 EMPTY_DATASET = {
@@ -157,10 +162,14 @@ class AnalysisChart(db.Model):
     legend = db.Column(db.String(120), nullable=False, default="")
     legend_position = db.Column(db.String(40), nullable=False, default="right")
     pie_label_mode = db.Column(db.String(40), nullable=False, default="legend")
+    pie_value_mode = db.Column(db.String(40), nullable=False, default="value")
+    pie_center_mode = db.Column(db.String(40), nullable=False, default="total")
+    pie_sector_label_mode = db.Column(db.String(40), nullable=False, default="name-percent")
     labels = db.Column(db.String(120), nullable=False, default="")
     comment_title = db.Column(db.String(255), nullable=False, default="")
     comment_text = db.Column(db.Text, nullable=False, default="")
     annotations_json = db.Column(db.Text, nullable=False, default="[]")
+    pie_sector_label_offsets_json = db.Column(db.Text, nullable=False, default="[]")
     is_hidden = db.Column(db.Boolean, nullable=False, default=False)
     position = db.Column(db.Integer, nullable=False, default=0)
 
@@ -172,9 +181,11 @@ class AnalysisUserState(db.Model):
     selected_analysis_type_id = db.Column(db.Integer, db.ForeignKey("analysis_types.id"), nullable=True)
     left_panel_width = db.Column(db.Integer, nullable=False, default=260)
     visual_source_kind = db.Column(db.String(40), nullable=False, default="none")
+    view_mode = db.Column(db.String(16), nullable=False, default="editor")
     table_search = db.Column(db.Text, nullable=False, default="")
     table_sort_column = db.Column(db.String(120), nullable=False, default="")
     table_sort_direction = db.Column(db.String(8), nullable=False, default="asc")
+    table_column_widths_json = db.Column(db.Text, nullable=False, default="{}")
     draft_state_json = db.Column(db.Text, nullable=False, default="")
 
 
@@ -225,6 +236,10 @@ def serialize_analysis_chart(chart):
         annotations = json.loads(chart.annotations_json or "[]")
     except json.JSONDecodeError:
         annotations = []
+    try:
+        pie_sector_label_offsets = json.loads(chart.pie_sector_label_offsets_json or "[]")
+    except json.JSONDecodeError:
+        pie_sector_label_offsets = []
 
     return {
         "id": chart.id,
@@ -238,10 +253,14 @@ def serialize_analysis_chart(chart):
         "legend": chart.legend,
         "legend_position": chart.legend_position,
         "pie_label_mode": chart.pie_label_mode,
+        "pie_value_mode": chart.pie_value_mode,
+        "pie_center_mode": chart.pie_center_mode,
+        "pie_sector_label_mode": chart.pie_sector_label_mode,
         "labels": chart.labels,
         "comment_title": chart.comment_title,
         "comment_text": chart.comment_text,
         "annotations": annotations if isinstance(annotations, list) else [],
+        "pie_sector_label_offsets": pie_sector_label_offsets if isinstance(pie_sector_label_offsets, list) else [],
         "is_hidden": chart.is_hidden,
         "position": chart.position,
     }
@@ -313,6 +332,7 @@ def get_analysis_user_state():
         return dict(DEFAULT_ANALYSIS_USER_STATE)
 
     draft_state = None
+    table_column_widths = {}
     if state.draft_state_json:
         try:
             raw_draft_state = json.loads(state.draft_state_json)
@@ -328,13 +348,32 @@ def get_analysis_user_state():
                 "charts": charts,
             }
 
+    if state.table_column_widths_json:
+        try:
+            raw_widths = json.loads(state.table_column_widths_json)
+        except json.JSONDecodeError:
+            raw_widths = {}
+
+        if isinstance(raw_widths, dict):
+            for key, value in raw_widths.items():
+                key_text = str(key or "").strip()
+                if not key_text:
+                    continue
+                try:
+                    width = max(72, int(float(value)))
+                except (TypeError, ValueError):
+                    continue
+                table_column_widths[key_text] = width
+
     return {
         "selected_analysis_type_id": state.selected_analysis_type_id,
         "left_panel_width": state.left_panel_width,
         "visual_source_kind": state.visual_source_kind or "none",
+        "view_mode": state.view_mode or "editor",
         "table_search": state.table_search or "",
         "table_sort_column": state.table_sort_column or "",
         "table_sort_direction": state.table_sort_direction or "asc",
+        "table_column_widths": table_column_widths,
         "draft_state": draft_state,
     }
 
@@ -352,12 +391,16 @@ def upsert_analysis_user_state(payload):
         state.left_panel_width = payload["left_panel_width"]
     if "visual_source_kind" in payload:
         state.visual_source_kind = payload["visual_source_kind"]
+    if "view_mode" in payload:
+        state.view_mode = payload["view_mode"]
     if "table_search" in payload:
         state.table_search = str(payload["table_search"] or "")
     if "table_sort_column" in payload:
         state.table_sort_column = str(payload["table_sort_column"] or "")
     if "table_sort_direction" in payload:
         state.table_sort_direction = payload["table_sort_direction"]
+    if "table_column_widths" in payload:
+        state.table_column_widths_json = json.dumps(payload["table_column_widths"] or {}, ensure_ascii=False)
     if "draft_state" in payload:
         draft_state = payload["draft_state"]
         state.draft_state_json = json.dumps(draft_state, ensure_ascii=False) if draft_state else ""
@@ -367,9 +410,11 @@ def upsert_analysis_user_state(payload):
 
 def ensure_analysis_user_state_schema():
     required_columns = {
+        "view_mode": "ALTER TABLE analysis_user_state ADD COLUMN view_mode VARCHAR(16) NOT NULL DEFAULT 'editor'",
         "table_search": "ALTER TABLE analysis_user_state ADD COLUMN table_search TEXT NOT NULL DEFAULT ''",
         "table_sort_column": "ALTER TABLE analysis_user_state ADD COLUMN table_sort_column VARCHAR(120) NOT NULL DEFAULT ''",
         "table_sort_direction": "ALTER TABLE analysis_user_state ADD COLUMN table_sort_direction VARCHAR(8) NOT NULL DEFAULT 'asc'",
+        "table_column_widths_json": "ALTER TABLE analysis_user_state ADD COLUMN table_column_widths_json TEXT NOT NULL DEFAULT '{}'",
         "draft_state_json": "ALTER TABLE analysis_user_state ADD COLUMN draft_state_json TEXT NOT NULL DEFAULT ''",
     }
 
@@ -586,10 +631,14 @@ def build_default_analysis_chart(position):
         "legend": "",
         "legend_position": "right",
         "pie_label_mode": "legend",
+        "pie_value_mode": "value",
+        "pie_center_mode": "total",
+        "pie_sector_label_mode": "name-percent",
         "labels": "",
         "comment_title": "",
         "comment_text": "",
         "annotations": [],
+        "pie_sector_label_offsets": [],
         "is_hidden": False,
         "position": position,
     }
@@ -634,6 +683,47 @@ def normalize_analysis_annotations(raw_annotations):
     return annotations
 
 
+def normalize_analysis_pie_sector_label_offsets(raw_offsets):
+    offsets = []
+    if raw_offsets is None:
+        return offsets
+
+    if not isinstance(raw_offsets, list):
+        return offsets
+
+    for item in raw_offsets[:24]:
+        if not isinstance(item, dict):
+            continue
+
+        try:
+            sector_index = int(item.get("index", -1))
+        except (TypeError, ValueError):
+            continue
+
+        if sector_index < 0:
+            continue
+
+        try:
+            dx = float(item.get("dx", 0))
+        except (TypeError, ValueError):
+            dx = 0.0
+
+        try:
+            dy = float(item.get("dy", 0))
+        except (TypeError, ValueError):
+            dy = 0.0
+
+        offsets.append(
+            {
+                "index": sector_index,
+                "dx": max(-100.0, min(100.0, dx)),
+                "dy": max(-100.0, min(100.0, dy)),
+            }
+        )
+
+    return offsets
+
+
 def normalize_analysis_charts(raw_charts):
     charts = []
     errors = []
@@ -657,6 +747,9 @@ def normalize_analysis_charts(raw_charts):
         agg_func = (item.get("agg_func") or "count").strip().lower() or "count"
         legend_position = (item.get("legend_position") or "right").strip().lower() or "right"
         pie_label_mode = (item.get("pie_label_mode") or "legend").strip().lower() or "legend"
+        pie_value_mode = (item.get("pie_value_mode") or "value").strip().lower() or "value"
+        pie_center_mode = (item.get("pie_center_mode") or "total").strip().lower() or "total"
+        pie_sector_label_mode = (item.get("pie_sector_label_mode") or "name-percent").strip().lower() or "name-percent"
         if chart_type not in ALLOWED_ANALYSIS_CHART_TYPES:
             errors.append(f"График #{index + 1}: тип '{chart_type}' не поддерживается.")
             continue
@@ -672,6 +765,15 @@ def normalize_analysis_charts(raw_charts):
         if pie_label_mode not in ALLOWED_ANALYSIS_PIE_LABEL_MODES:
             errors.append(f"График #{index + 1}: режим подписей pie '{pie_label_mode}' не поддерживается.")
             continue
+        if pie_value_mode not in ALLOWED_ANALYSIS_PIE_VALUE_MODES:
+            errors.append(f"График #{index + 1}: формат значений pie '{pie_value_mode}' не поддерживается.")
+            continue
+        if pie_center_mode not in ALLOWED_ANALYSIS_PIE_CENTER_MODES:
+            errors.append(f"График #{index + 1}: режим центра pie '{pie_center_mode}' не поддерживается.")
+            continue
+        if pie_sector_label_mode not in ALLOWED_ANALYSIS_PIE_SECTOR_LABEL_MODES:
+            errors.append(f"График #{index + 1}: формат подписи сектора pie '{pie_sector_label_mode}' не поддерживается.")
+            continue
 
         charts.append(
             {
@@ -685,10 +787,14 @@ def normalize_analysis_charts(raw_charts):
                 "legend": (item.get("legend") or "").strip(),
                 "legend_position": legend_position,
                 "pie_label_mode": pie_label_mode,
+                "pie_value_mode": pie_value_mode,
+                "pie_center_mode": pie_center_mode,
+                "pie_sector_label_mode": pie_sector_label_mode,
                 "labels": (item.get("labels") or "").strip(),
                 "comment_title": (item.get("comment_title") or "").strip()[:255],
                 "comment_text": str(item.get("comment_text") or "").strip(),
                 "annotations": normalize_analysis_annotations(item.get("annotations")),
+                "pie_sector_label_offsets": normalize_analysis_pie_sector_label_offsets(item.get("pie_sector_label_offsets")),
                 "is_hidden": bool(item.get("is_hidden")),
                 "position": len(charts),
             }
@@ -731,10 +837,14 @@ def replace_analysis_type_charts(analysis_type, charts):
                 legend=item["legend"],
                 legend_position=item["legend_position"],
                 pie_label_mode=item["pie_label_mode"],
+                pie_value_mode=item["pie_value_mode"],
+                pie_center_mode=item["pie_center_mode"],
+                pie_sector_label_mode=item["pie_sector_label_mode"],
                 labels=item["labels"],
                 comment_title=item["comment_title"],
                 comment_text=item["comment_text"],
                 annotations_json=json.dumps(item["annotations"], ensure_ascii=False),
+                pie_sector_label_offsets_json=json.dumps(item["pie_sector_label_offsets"], ensure_ascii=False),
                 is_hidden=item["is_hidden"],
                 position=item["position"],
             )
@@ -746,8 +856,12 @@ def ensure_analysis_chart_schema():
         "comment_title": "ALTER TABLE analysis_charts ADD COLUMN comment_title VARCHAR(255) NOT NULL DEFAULT ''",
         "comment_text": "ALTER TABLE analysis_charts ADD COLUMN comment_text TEXT NOT NULL DEFAULT ''",
         "annotations_json": "ALTER TABLE analysis_charts ADD COLUMN annotations_json TEXT NOT NULL DEFAULT '[]'",
+        "pie_sector_label_offsets_json": "ALTER TABLE analysis_charts ADD COLUMN pie_sector_label_offsets_json TEXT NOT NULL DEFAULT '[]'",
         "legend_position": "ALTER TABLE analysis_charts ADD COLUMN legend_position VARCHAR(40) NOT NULL DEFAULT 'right'",
         "pie_label_mode": "ALTER TABLE analysis_charts ADD COLUMN pie_label_mode VARCHAR(40) NOT NULL DEFAULT 'legend'",
+        "pie_value_mode": "ALTER TABLE analysis_charts ADD COLUMN pie_value_mode VARCHAR(40) NOT NULL DEFAULT 'value'",
+        "pie_center_mode": "ALTER TABLE analysis_charts ADD COLUMN pie_center_mode VARCHAR(40) NOT NULL DEFAULT 'total'",
+        "pie_sector_label_mode": "ALTER TABLE analysis_charts ADD COLUMN pie_sector_label_mode VARCHAR(40) NOT NULL DEFAULT 'name-percent'",
     }
 
     with db.engine.begin() as connection:
@@ -1632,6 +1746,9 @@ def save_analysis_state():
     if "visual_source_kind" in payload:
         value = (payload.get("visual_source_kind") or "none").strip().lower()
         next_payload["visual_source_kind"] = value if value in ALLOWED_ANALYSIS_SOURCES else "none"
+    if "view_mode" in payload:
+        view_mode = (payload.get("view_mode") or "editor").strip().lower()
+        next_payload["view_mode"] = view_mode if view_mode in {"editor", "sheet", "pair", "quad"} else "editor"
     if "table_search" in payload:
         next_payload["table_search"] = str(payload.get("table_search") or "")
     if "table_sort_column" in payload:
@@ -1639,6 +1756,20 @@ def save_analysis_state():
     if "table_sort_direction" in payload:
         direction = (payload.get("table_sort_direction") or "asc").strip().lower()
         next_payload["table_sort_direction"] = direction if direction in {"asc", "desc"} else "asc"
+    if "table_column_widths" in payload:
+        raw_widths = payload.get("table_column_widths") or {}
+        if not isinstance(raw_widths, dict):
+            return jsonify({"ok": False, "error": "Некорректный формат ширин колонок анализа."}), 400
+        normalized_widths = {}
+        for key, value in raw_widths.items():
+            key_text = str(key or "").strip()
+            if not key_text:
+                continue
+            try:
+                normalized_widths[key_text] = max(72, int(float(value)))
+            except (TypeError, ValueError):
+                continue
+        next_payload["table_column_widths"] = normalized_widths
     if "draft_state" in payload:
         raw_draft_state = payload.get("draft_state")
         if raw_draft_state:

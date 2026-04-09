@@ -1945,6 +1945,16 @@ input[type="range"] {
     cursor: grabbing;
 }
 
+.analysis-pie-sector-label {
+    cursor: grab;
+    pointer-events: auto;
+    user-select: none;
+}
+
+.analysis-pie-sector-label:active {
+    cursor: grabbing;
+}
+
 .analysis-chart-svg {
     width: 100%;
     height: auto;
@@ -1964,6 +1974,7 @@ input[type="range"] {
     margin-top: 8px;
 }
 
+.analysis-chart-legend-left,
 .analysis-chart-legend-right,
 .analysis-chart-legend-bottom,
 .analysis-chart-legend-inside-top-right,
@@ -1974,6 +1985,7 @@ input[type="range"] {
     border: 1px solid rgba(74, 56, 38, 0.12);
 }
 
+.analysis-chart-legend-left,
 .analysis-chart-legend-right {
     flex-direction: column;
     align-items: flex-start;
@@ -2063,6 +2075,8 @@ input[type="range"] {
     gap: 12px;
     min-height: 520px;
     overflow: hidden;
+    --analysis-sheet-grid-height: auto;
+    --analysis-sheet-row-height: minmax(0, 1fr);
 }
 
 .analysis-sheet-head {
@@ -2088,7 +2102,181 @@ input[type="range"] {
     gap: 12px;
     flex: 1 1 auto;
     min-height: 0;
-    grid-auto-rows: minmax(0, 1fr);
+    height: var(--analysis-sheet-grid-height);
+    max-height: var(--analysis-sheet-grid-height);
+    grid-template-rows: repeat(2, var(--analysis-sheet-row-height));
+    grid-auto-rows: var(--analysis-sheet-row-height);
+}
+
+.analysis-sheet-view[data-layout="pair"] .analysis-sheet-grid,
+.analysis-sheet-grid[data-layout="pair"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: var(--analysis-sheet-row-height);
+    grid-auto-rows: var(--analysis-sheet-row-height);
+}
+
+.analysis-sheet-view[data-layout="quad"] .analysis-sheet-grid,
+.analysis-sheet-grid[data-layout="quad"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: repeat(2, var(--analysis-sheet-row-height));
+    grid-auto-rows: var(--analysis-sheet-row-height);
+    gap: 8px;
+}
+
+.analysis-sheet-view[data-layout="pair"] .analysis-sheet-card,
+.analysis-sheet-view[data-layout="pair"] .analysis-sheet-placeholder,
+.analysis-sheet-view[data-layout="pair"] .analysis-sheet-empty {
+    min-height: var(--analysis-sheet-row-height);
+}
+
+.analysis-sheet-view[data-layout="quad"] .analysis-sheet-card,
+.analysis-sheet-view[data-layout="quad"] .analysis-sheet-placeholder,
+.analysis-sheet-view[data-layout="quad"] .analysis-sheet-empty {
+    min-height: var(--analysis-sheet-row-height);
+}
+
+.analysis-sheet-view[data-layout="pair"] .analysis-sheet-card .analysis-chart-preview {
+    padding: 12px;
+}
+
+.analysis-sheet-view[data-layout="pair"] .analysis-sheet-card .analysis-chart-preview-body.has-side-legend {
+    grid-template-columns: minmax(0, 1fr) minmax(156px, 188px);
+}
+
+.analysis-sheet-view[data-layout="pair"] .analysis-sheet-card .analysis-chart-legend-item {
+    font-size: 12px;
+}
+
+.analysis-sheet-view[data-layout="pair"] .analysis-sheet-card .analysis-chart-svg text {
+    font-size: 11px;
+}
+
+.analysis-sheet-view[data-layout="pair"] .analysis-sheet-card.is-pair-card {
+    padding: 14px;
+}
+
+.analysis-sheet-view[data-layout="pair"] .analysis-sheet-card.is-pair-card .analysis-sheet-card-body {
+    gap: 10px;
+}
+
+.analysis-sheet-view[data-layout="pair"] .analysis-sheet-card.is-pair-card .analysis-chart-preview {
+    gap: 8px;
+}
+
+.analysis-sheet-view[data-layout="pair"] .analysis-sheet-card.is-pair-card .analysis-chart-canvas {
+    min-height: 220px;
+}
+
+.analysis-sheet-view[data-layout="pair"] .analysis-sheet-card.is-pair-card .analysis-chart-visual {
+    align-items: center;
+}
+
+.analysis-sheet-view[data-layout="pair"] .analysis-sheet-card.is-pair-card .analysis-chart-svg {
+    max-height: 240px;
+}
+
+.analysis-sheet-view[data-layout="quad"] .analysis-sheet-card.is-quad-card {
+    padding: 8px;
+    gap: 6px;
+}
+
+.analysis-sheet-view[data-layout="quad"] .analysis-sheet-card.is-quad-card .analysis-sheet-card-head h4 {
+    margin-bottom: 2px;
+    font-size: 13px;
+    line-height: 1.1;
+}
+
+.analysis-sheet-view[data-layout="quad"] .analysis-sheet-card.is-quad-card .analysis-sheet-card-meta,
+.analysis-sheet-view[data-layout="quad"] .analysis-sheet-card.is-quad-card .analysis-sheet-card-status {
+    font-size: 10px;
+    line-height: 1.1;
+}
+
+.analysis-sheet-view[data-layout="quad"] .analysis-sheet-card.is-quad-card .analysis-chart-preview {
+    padding: 6px;
+    gap: 4px;
+}
+
+.analysis-sheet-view[data-layout="quad"] .analysis-sheet-card.is-quad-card .analysis-chart-preview-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.analysis-sheet-view[data-layout="quad"] .analysis-sheet-card.is-quad-card .analysis-chart-preview-body.has-side-legend {
+    grid-template-columns: minmax(92px, 118px) minmax(0, 1fr);
+    gap: 6px;
+    align-items: stretch;
+}
+
+.analysis-sheet-view[data-layout="quad"] .analysis-sheet-card.is-quad-card .analysis-chart-preview-body.has-side-legend-right {
+    grid-template-columns: minmax(0, 1fr) minmax(92px, 118px);
+}
+
+.analysis-sheet-view[data-layout="quad"] .analysis-sheet-card.is-quad-card .analysis-chart-canvas {
+    min-height: 0;
+    height: 100%;
+    align-self: stretch;
+}
+
+.analysis-sheet-view[data-layout="quad"] .analysis-sheet-card.is-quad-card .analysis-chart-legend {
+    gap: 4px 6px;
+    margin-top: 0;
+}
+
+.analysis-sheet-view[data-layout="quad"] .analysis-sheet-card.is-quad-card .analysis-chart-preview-body.has-side-legend .analysis-chart-legend {
+    align-self: start;
+    max-height: 100%;
+    overflow: hidden;
+}
+
+.analysis-sheet-view[data-layout="quad"] .analysis-sheet-card.is-quad-card .analysis-chart-legend-item {
+    gap: 5px;
+    font-size: 9px;
+    line-height: 1.15;
+}
+
+.analysis-sheet-view[data-layout="quad"] .analysis-sheet-card.is-quad-card .analysis-chart-svg text {
+    font-size: 9px;
+}
+
+.analysis-sheet-view[data-layout="quad"] .analysis-sheet-card.is-quad-card .analysis-chart-svg {
+    max-height: none;
+}
+
+.analysis-sheet-view[data-layout="quad"] .analysis-sheet-card.is-quad-card .analysis-sheet-card-body {
+    gap: 4px;
+    overflow: hidden;
+    scrollbar-gutter: auto;
+}
+
+.analysis-sheet-view[data-layout="quad"] .analysis-sheet-card.is-quad-card .analysis-sheet-card-head {
+    gap: 6px;
+}
+
+.analysis-sheet-view[data-layout="quad"] .analysis-sheet-card.is-quad-card .analysis-sheet-card-status {
+    padding: 3px 6px;
+    white-space: nowrap;
+}
+
+.analysis-sheet-view[data-layout="quad"] .analysis-sheet-card.is-quad-card .analysis-chart-visual {
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    height: 100%;
+}
+
+.analysis-sheet-view[data-layout="quad"] .analysis-sheet-card.is-quad-card .analysis-chart-svg[aria-label="Круговая диаграмма"] {
+    width: auto;
+    height: 100%;
+    max-width: 100%;
+    max-height: 100%;
+}
+
+.analysis-sheet-view[data-layout="quad"] .analysis-sheet-card.is-quad-card .analysis-chart-annotation {
+    max-width: 42%;
+    padding: 3px 6px;
+    font-size: 10px;
 }
 
 .analysis-sheet-card,
@@ -2114,10 +2302,9 @@ input[type="range"] {
     min-height: 0;
     flex-direction: column;
     gap: 8px;
-}
-
-.analysis-sheet-card-body.has-comment {
-    gap: 6px;
+    overflow: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable both-edges;
 }
 
 .analysis-sheet-card.is-incompatible {
@@ -2182,13 +2369,20 @@ input[type="range"] {
 }
 
 .analysis-sheet-card .analysis-chart-preview-body {
+    display: flex;
+    flex-direction: column;
     flex: 1 1 auto;
     min-height: 0;
 }
 
 .analysis-sheet-card .analysis-chart-preview-body.has-side-legend {
-    grid-template-columns: minmax(0, 1fr) minmax(108px, 132px);
+    display: grid;
+    grid-template-columns: minmax(108px, 132px) minmax(0, 1fr);
     gap: 8px;
+}
+
+.analysis-sheet-card .analysis-chart-preview-body.has-side-legend-right {
+    grid-template-columns: minmax(0, 1fr) minmax(108px, 132px);
 }
 
 .analysis-sheet-card .analysis-chart-canvas {
@@ -2196,14 +2390,22 @@ input[type="range"] {
     height: 100%;
 }
 
+.analysis-sheet-card .analysis-chart-visual {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+    align-items: stretch;
+}
+
+.analysis-sheet-card .analysis-chart-svg {
+    width: 100%;
+    height: 100%;
+    max-height: 100%;
+}
+
 .analysis-sheet-card .analysis-chart-annotation {
     max-width: 46%;
     padding: 4px 8px;
-    font-size: 11px;
-}
-
-.analysis-sheet-card .analysis-chart-warning {
-    padding: 6px 8px;
     font-size: 11px;
 }
 
@@ -2218,25 +2420,6 @@ input[type="range"] {
 
 .analysis-sheet-card .analysis-chart-svg text {
     font-size: 9px;
-}
-
-.analysis-sheet-card .analysis-chart-comment-block {
-    padding: 8px 10px;
-}
-
-.analysis-sheet-card .analysis-chart-comment-block h3 {
-    margin-bottom: 4px;
-    font-size: 12px;
-}
-
-.analysis-sheet-card .analysis-chart-comment-block p {
-    font-size: 12px;
-    line-height: 1.35;
-    display: -webkit-box;
-    line-clamp: 3;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 3;
-    overflow: hidden;
 }
 
 @media (max-width: 1100px) {
@@ -2258,6 +2441,19 @@ input[type="range"] {
 
     .analysis-sheet-grid {
         grid-template-columns: 1fr;
+        height: auto;
+        max-height: none;
+        grid-template-rows: none;
+        grid-auto-rows: minmax(220px, auto);
+    }
+
+    .analysis-sheet-view[data-layout="pair"] .analysis-sheet-grid,
+    .analysis-sheet-grid[data-layout="pair"],
+    .analysis-sheet-view[data-layout="quad"] .analysis-sheet-grid,
+    .analysis-sheet-grid[data-layout="quad"] {
+        grid-template-columns: 1fr;
+        grid-template-rows: none;
+        grid-auto-rows: minmax(260px, auto);
     }
 }
 
